@@ -1,0 +1,74 @@
+version: '3.8'
+
+# TradeHub 本地开发环境 - 仅基础设施
+# 业务服务在本地直接启动，不用 Docker
+
+services:
+  # PostgreSQL - 独立端口 5433
+  postgres:
+    image: postgres:16-alpine
+    container_name: tradehub-postgres-local
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradehub_local}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5433:5432"
+    volumes:
+      - tradehub_postgres_local:/var/lib/postgresql/data
+      - ./docker/init-scripts/postgres/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tradehub-local
+
+  # Redis - 独立端口 6380
+  redis:
+    image: redis:7-alpine
+    container_name: tradehub-redis-local
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - tradehub_redis_local:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - tradehub-local
+
+  # TDengine - 独立端口，避免与 PowerTradeMain(16041) 冲突
+  tdengine:
+    image: tdengine/tdengine:3.3.6.0
+    container_name: tradehub-tdengine-local
+    restart: unless-stopped
+    ports:
+      - "16042:6041"    # REST API（PowerTradeMain 用 16041）
+      - "16030:6030"    # native 连接（PowerTradeMain 未暴露此端口但保留差异）
+    volumes:
+      - tradehub_tdengine_local:/var/lib/taos
+    healthcheck:
+      test: ["CMD-SHELL", "taos -s 'show databases' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - tradehub-local
+
+volumes:
+  tradehub_postgres_local:
+    driver: local
+  tradehub_redis_local:
+    driver: local
+  tradehub_tdengine_local:
+    driver: local
+
+networks:
+  tradehub-local:
+    driver: bridge

@@ -1,0 +1,273 @@
+# TradeHub 一体化编排候选。
+#
+# 本地开发入口仍然是 `./dev.sh start` + 宿主机分别启动业务服务。
+# 这个文件只保留真实路径的一体化 Docker 编排，避免旧 services/* 路径继续误导。
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tradehub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradehub_local_password}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-scripts/postgres/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tradehub
+
+  redis:
+    image: redis:7-alpine
+    container_name: tradehub-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - tradehub
+
+  tdengine:
+    image: tdengine/tdengine:3.3.6.0
+    container_name: tradehub-tdengine
+    restart: unless-stopped
+    ports:
+      - "${TDENGINE_REST_PORT:-16042}:6041"
+      - "${TDENGINE_NATIVE_PORT:-16030}:6030"
+    volumes:
+      - tdengine_data:/var/lib/taos
+    healthcheck:
+      test: ["CMD-SHELL", "taos -s 'show databases' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - tradehub
+
+  market-api:
+    build:
+      context: ./tradehub-market-api
+    container_name: tradehub-market-api
+    restart: unless-stopped
+    environment:
+      MARKET_API_ADDR: ":18080"
+      XUEQIU_COOKIE: ${XUEQIU_COOKIE:-}
+    ports:
+      - "${MARKET_API_PORT:-17080}:18080"
+    networks:
+      - tradehub
+
+  fund-backend:
+    build:
+      context: ./tradehub-fund
+    container_name: tradehub-fund-backend
+    restart: unless-stopped
+    command: gunicorn fundval.wsgi:application --bind 0.0.0.0:8000 --workers ${GUNICORN_WORKERS:-4} --timeout 90 --access-logfile - --error-logfile -
+    environment:
+      DB_TYPE: postgresql
+      POSTGRES_DB: ${FUND_DB:-fundval}
+      POSTGRES_USER: ${FUND_DB_USER:-fundval}
+      POSTGRES_PASSWORD: ${FUND_DB_PASSWORD:-tradehub_local_password}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-only-change-in-production}
+      DEBUG: ${DEBUG:-false}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-*}
+      ALLOW_REGISTER: ${ALLOW_REGISTER:-false}
+      MARKET_API_URL: http://market-api:18080
+      STOCK_API_URL: http://stock-api:8000
+    ports:
+      - "${FUND_PORT:-7001}:8000"
+    volumes:
+      - fund_config:/app/config
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      market-api:
+        condition: service_started
+    networks:
+      - tradehub
+
+  fund-worker:
+    build:
+      context: ./tradehub-fund
+    container_name: tradehub-fund-worker
+    restart: unless-stopped
+    entrypoint: []
+    command: celery -A fundval worker -l ${CELERY_LOGLEVEL:-info}
+    environment:
+      DB_TYPE: postgresql
+      POSTGRES_DB: ${FUND_DB:-fundval}
+      POSTGRES_USER: ${FUND_DB_USER:-fundval}
+      POSTGRES_PASSWORD: ${FUND_DB_PASSWORD:-tradehub_local_password}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-only-change-in-production}
+      DEBUG: ${DEBUG:-false}
+      MARKET_API_URL: http://market-api:18080
+      STOCK_API_URL: http://stock-api:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - fund_config:/app/config
+    networks:
+      - tradehub
+
+  fund-beat:
+    build:
+      context: ./tradehub-fund
+    container_name: tradehub-fund-beat
+    restart: unless-stopped
+    entrypoint: []
+    command: celery -A fundval beat -l ${CELERY_LOGLEVEL:-info}
+    environment:
+      DB_TYPE: postgresql
+      POSTGRES_DB: ${FUND_DB:-fundval}
+      POSTGRES_USER: ${FUND_DB_USER:-fundval}
+      POSTGRES_PASSWORD: ${FUND_DB_PASSWORD:-tradehub_local_password}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-only-change-in-production}
+      DEBUG: ${DEBUG:-false}
+      MARKET_API_URL: http://market-api:18080
+      STOCK_API_URL: http://stock-api:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - fund_config:/app/config
+    networks:
+      - tradehub
+
+  stock-api:
+    build:
+      context: ./tradehub-stock
+      dockerfile: api/Dockerfile
+    container_name: tradehub-stock-api
+    restart: unless-stopped
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${STOCK_DB:-stock_etf}
+      POSTGRES_USER: ${STOCK_DB_USER:-stock}
+      POSTGRES_PASSWORD: ${STOCK_DB_PASSWORD:-tradehub_local_password}
+      REDIS_URL: redis://redis:6379/1
+      TDENGINE_HOST: tdengine
+      TDENGINE_PORT: 6041
+      TDENGINE_USER: ${TDENGINE_USER:-root}
+      TDENGINE_PASSWORD: ${TDENGINE_PASSWORD:-taosdata}
+      TDENGINE_DATABASE: ${TDENGINE_DATABASE:-stock_etf_ts}
+      MARKET_API_URL: http://market-api:18080
+      STOCK_API_URL: http://stock-api:8000
+      SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-only-change-in-production}
+      JWT_SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-only-change-in-production}
+    ports:
+      - "${STOCK_PORT:-7002}:8000"
+    volumes:
+      - stock_mootdx_config:/root/.mootdx
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      tdengine:
+        condition: service_healthy
+      market-api:
+        condition: service_started
+    networks:
+      - tradehub
+
+  stock-worker:
+    build:
+      context: ./tradehub-stock
+      dockerfile: worker/Dockerfile
+    container_name: tradehub-stock-worker
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${STOCK_DB:-stock_etf}
+      POSTGRES_USER: ${STOCK_DB_USER:-stock}
+      POSTGRES_PASSWORD: ${STOCK_DB_PASSWORD:-tradehub_local_password}
+      REDIS_URL: redis://redis:6379/1
+      TDENGINE_HOST: tdengine
+      TDENGINE_PORT: 6041
+      TDENGINE_USER: ${TDENGINE_USER:-root}
+      TDENGINE_PASSWORD: ${TDENGINE_PASSWORD:-taosdata}
+      TDENGINE_DATABASE: ${TDENGINE_DATABASE:-stock_etf_ts}
+      MARKET_API_URL: http://market-api:18080
+      SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-only-change-in-production}
+      WORKER_HEARTBEAT_SECONDS: ${WORKER_HEARTBEAT_SECONDS:-10}
+      WORKER_RUNNING_TIMEOUT_SECONDS: ${WORKER_RUNNING_TIMEOUT_SECONDS:-120}
+    volumes:
+      - stock_mootdx_config:/root/.mootdx
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tdengine:
+        condition: service_healthy
+      market-api:
+        condition: service_started
+    networks:
+      - tradehub
+
+  frontend:
+    image: node:24-alpine
+    container_name: tradehub-frontend
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      VITE_FUND_API_BASE: ${VITE_FUND_API_BASE:-http://127.0.0.1:7001/api}
+      VITE_STOCK_API_BASE: ${VITE_STOCK_API_BASE:-http://127.0.0.1:7002}
+      VITE_MARKET_API_BASE: ${VITE_MARKET_API_BASE:-http://127.0.0.1:17080}
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./tradehub-frontend:/app
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      fund-backend:
+        condition: service_started
+      stock-api:
+        condition: service_started
+    networks:
+      - tradehub
+
+volumes:
+  postgres_data:
+  redis_data:
+  tdengine_data:
+  fund_config:
+  frontend_node_modules:
+  stock_mootdx_config:
+
+networks:
+  tradehub:
+    driver: bridge

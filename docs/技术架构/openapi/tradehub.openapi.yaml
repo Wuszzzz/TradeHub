@@ -1,0 +1,1422 @@
+openapi: 3.1.0
+info:
+  title: TradeHub API
+  version: 1.0.0
+  description: |
+    TradeHub 第一阶段 API 契约骨架。旧 `/api/v1/*` 接口继续兼容，
+    新增能力按 `/api/{domain}/v1/*` 分域推进。
+servers:
+  - url: http://127.0.0.1:7002
+    description: stock-api local
+paths:
+  /api/system/v1/health:
+    get:
+      tags:
+        - system
+      summary: 股票服务健康检查
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/system/v1/overview:
+    get:
+      tags:
+        - system
+      summary: 股票服务架构概览
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/instruments/search:
+    get:
+      tags:
+        - stock
+      summary: 搜索股票标的
+      parameters:
+        - name: keyword
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/instruments/profile:
+    get:
+      tags:
+        - stock
+      summary: 获取股票标的资料
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/market/snapshot:
+    get:
+      tags:
+        - stock
+      summary: 获取股票实时快照
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/market/kline:
+    get:
+      tags:
+        - stock
+      summary: 获取股票 K 线
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            default: 1m
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 120
+            maximum: 2000
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/etf/risk:
+    get:
+      tags:
+        - stock
+      summary: 获取 ETF 风控信息
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 120
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/watchlist/groups:
+    get:
+      tags:
+        - stock
+      summary: 获取股票自选分组
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    post:
+      tags:
+        - stock
+      summary: 创建或更新股票自选分组
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    delete:
+      tags:
+        - stock
+      summary: 删除股票自选分组
+      parameters:
+        - name: group_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/watchlist/items:
+    get:
+      tags:
+        - stock
+      summary: 获取股票自选项
+      parameters:
+        - name: group_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    post:
+      tags:
+        - stock
+      summary: 添加或更新股票自选项
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    delete:
+      tags:
+        - stock
+      summary: 删除股票自选项
+      parameters:
+        - name: item_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/tasks/ingestion:
+    get:
+      tags:
+        - stock
+      summary: 获取股票采集任务
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    post:
+      tags:
+        - stock
+      summary: 创建股票采集任务
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    delete:
+      tags:
+        - stock
+      summary: 删除股票采集任务
+      parameters:
+        - name: task_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/tasks:
+    get:
+      tags:
+        - stock
+      summary: 获取通用股票任务列表或详情
+      parameters:
+        - name: task_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: task_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    post:
+      tags:
+        - stock
+      summary: 创建通用股票任务
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/tasks/status:
+    post:
+      tags:
+        - stock
+      summary: 更新通用股票任务状态
+      parameters:
+        - name: task_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/tasks/logs:
+    get:
+      tags:
+        - stock
+      summary: 获取通用股票任务日志
+      parameters:
+        - name: task_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    post:
+      tags:
+        - stock
+      summary: 追加通用股票任务日志
+      parameters:
+        - name: task_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/quant/indicators:
+    get:
+      tags:
+        - stock
+      summary: 获取技术指标定义
+      parameters:
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: enabled_only
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    post:
+      tags:
+        - stock
+      summary: 创建或更新技术指标定义
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IndicatorDefinitionInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/quant/indicator-values:
+    get:
+      tags:
+        - stock
+      summary: 获取技术指标计算结果
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            default: 1d
+        - name: indicator_code
+          in: query
+          required: true
+          schema:
+            type: string
+            example: MACD
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+            maximum: 5000
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/quant/patterns:
+    get:
+      tags:
+        - stock
+      summary: 获取 K 线形态定义
+      parameters:
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: enabled_only
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    post:
+      tags:
+        - stock
+      summary: 创建或更新 K 线形态定义
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatternDefinitionInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/quant/pattern-hits:
+    get:
+      tags:
+        - stock
+      summary: 获取 K 线形态命中结果
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            default: 1d
+        - name: pattern_code
+          in: query
+          required: false
+          schema:
+            type: string
+            example: engulfing_pattern
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+            maximum: 5000
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/screener/indicator:
+    get:
+      tags:
+        - stock
+      summary: 按技术指标条件选股
+      parameters:
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            default: 1d
+        - name: indicator_code
+          in: query
+          required: true
+          schema:
+            type: string
+            example: MACD
+        - name: field
+          in: query
+          required: true
+          schema:
+            type: string
+            example: macd
+        - name: op
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [gt, gte, lt, lte, eq]
+        - name: threshold
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 0
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+            maximum: 1000
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/screener/pattern:
+    get:
+      tags:
+        - stock
+      summary: 按 K 线形态命中选股
+      parameters:
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            default: 1d
+        - name: pattern_code
+          in: query
+          required: true
+          schema:
+            type: string
+            example: engulfing_pattern
+        - name: direction
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [bullish, bearish, neutral]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+            maximum: 1000
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/screener/templates:
+    get:
+      tags:
+        - stock
+      summary: 获取组合选股模板
+      parameters:
+        - name: enabled_only
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    post:
+      tags:
+        - stock
+      summary: 创建或更新组合选股模板
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScreeningTemplateInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    delete:
+      tags:
+        - stock
+      summary: 删除组合选股模板
+      parameters:
+        - name: template_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/strategies/templates:
+    get:
+      tags:
+        - stock
+      summary: 获取策略模板
+      parameters:
+        - name: enabled_only
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    post:
+      tags:
+        - stock
+      summary: 创建或更新策略模板
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrategyTemplateInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    delete:
+      tags:
+        - stock
+      summary: 删除策略模板
+      parameters:
+        - name: strategy_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/strategies/runs:
+    get:
+      tags:
+        - stock
+      summary: 获取策略运行记录
+      parameters:
+        - name: strategy_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: task_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+            maximum: 1000
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/screener/results:
+    get:
+      tags:
+        - stock
+      summary: 获取异步选股结果
+      parameters:
+        - name: task_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: template_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+            maximum: 1000
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/backtest/results:
+    get:
+      tags:
+        - stock
+      summary: 获取异步回测结果
+      parameters:
+        - name: task_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: symbol
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+            maximum: 1000
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/backtest/summaries:
+    get:
+      tags:
+        - stock
+      summary: 获取异步回测汇总
+      parameters:
+        - name: task_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+            maximum: 1000
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/backtest/execute:
+    post:
+      tags:
+        - stock
+      summary: 执行策略回测
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                strategy_id:
+                  type: string
+                  example: ma_5_20
+                strategy_name:
+                  type: string
+                  example: 均线策略
+                symbol:
+                  type: string
+                  example: 000001
+                period:
+                  type: string
+                  default: 1d
+                lookback:
+                  type: integer
+                  default: 260
+                hold_bars:
+                  type: integer
+                  default: 20
+                initial_cash:
+                  type: number
+                  default: 1000000
+                fee_rate:
+                  type: number
+                  default: 0.00025
+                slippage_rate:
+                  type: number
+                  default: 0.0005
+                stop_loss:
+                  type: number
+                  default: 0
+                take_profit:
+                  type: number
+                  default: 0
+                benchmark:
+                  type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/backtest/strategies:
+    get:
+      tags:
+        - stock
+      summary: 获取可用回测策略列表
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/watchlist/snapshot:
+    get:
+      tags:
+        - stock
+      summary: 获取自选股批量快照
+      parameters:
+        - name: group_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/alerts/rules:
+    get:
+      tags:
+        - stock
+      summary: 获取股票告警规则
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    post:
+      tags:
+        - stock
+      summary: 创建或更新股票告警规则
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    delete:
+      tags:
+        - stock
+      summary: 删除股票告警规则
+      parameters:
+        - name: rule_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/alerts/events:
+    get:
+      tags:
+        - stock
+      summary: 获取股票告警事件
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/alerts/events/ack:
+    post:
+      tags:
+        - stock
+      summary: 确认股票告警事件
+      parameters:
+        - name: event_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/paper/orders:
+    get:
+      tags:
+        - stock
+      summary: 获取模拟交易订单
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+    post:
+      tags:
+        - stock
+      summary: 提交模拟交易订单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/paper/positions:
+    get:
+      tags:
+        - stock
+      summary: 获取模拟交易持仓
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/paper/account:
+    get:
+      tags:
+        - stock
+      summary: 获取模拟交易账户
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/paper/reset:
+    post:
+      tags:
+        - stock
+      summary: 重置模拟交易账户
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/stock/v1/broker/status:
+    get:
+      tags:
+        - stock
+      summary: 获取券商适配状态
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+components:
+  schemas:
+    ApiMeta:
+      type: object
+      required:
+        - request_id
+        - timestamp
+      properties:
+        request_id:
+          type: string
+          example: req_20260614_120000_123456
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+          example: v1
+    ApiErrorDetail:
+      type: object
+      properties:
+        field:
+          type: string
+        detail:
+          type: string
+    ApiResponse:
+      type: object
+      required:
+        - success
+        - code
+        - message
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        code:
+          type: string
+          example: OK
+        message:
+          type: string
+          example: ok
+        data: {}
+        meta:
+          $ref: "#/components/schemas/ApiMeta"
+        error:
+          $ref: "#/components/schemas/ApiErrorDetail"
+    IndicatorDefinitionInput:
+      type: object
+      required:
+        - indicator_code
+        - name
+      properties:
+        indicator_code:
+          type: string
+          example: MACD
+        name:
+          type: string
+          example: 指数平滑异同移动平均线
+        category:
+          type: string
+          example: trend
+        description:
+          type: string
+        params_schema:
+          type: string
+          example: '{"fast":12,"slow":26,"signal":9}'
+        output_fields:
+          type: string
+          example: '["dif","dea","macd"]'
+        enabled:
+          type: boolean
+          default: true
+    PatternDefinitionInput:
+      type: object
+      required:
+        - pattern_code
+        - name
+        - talib_function
+      properties:
+        pattern_code:
+          type: string
+          example: engulfing_pattern
+        name:
+          type: string
+          example: 吞噬模式
+        category:
+          type: string
+          example: candlestick
+        talib_function:
+          type: string
+          example: CDLENGULFING
+        direction:
+          type: string
+          enum:
+            - bullish
+            - bearish
+            - both
+            - neutral
+          default: both
+        description:
+          type: string
+        params_schema:
+          type: string
+          example: '{}'
+        enabled:
+          type: boolean
+          default: true
+    ScreeningTemplateInput:
+      type: object
+      required:
+        - name
+        - conditions
+      properties:
+        template_id:
+          type: string
+          example: screen_tpl_macd_engulfing
+        name:
+          type: string
+          example: MACD红柱且吞噬形态
+        description:
+          type: string
+          example: MACD macd > 0 且最近出现看涨吞噬形态
+        conditions:
+          type: object
+          additionalProperties: true
+          example:
+            logic: and
+            indicator_conditions:
+              - period: 1d
+                indicator_code: MACD
+                field: macd
+                op: gt
+                threshold: 0
+            pattern_conditions:
+              - period: 1d
+                pattern_code: engulfing_pattern
+                direction: bullish
+        enabled:
+          type: boolean
+          default: true
+        created_by:
+          type: string
+          example: system
+    StrategyTemplateInput:
+      type: object
+      required:
+        - name
+      properties:
+        strategy_id:
+          type: string
+          example: strategy_tpl_macd_engulfing
+        name:
+          type: string
+          example: MACD 吞噬回测策略
+        description:
+          type: string
+          example: 使用 MACD 红柱和看涨吞噬形态选股，并执行 20 日持有回测
+        screening_template_id:
+          type: string
+          example: screen_tpl_macd_engulfing
+        conditions:
+          type: object
+          additionalProperties: true
+        backtest_params:
+          type: object
+          additionalProperties: true
+          example:
+            period: 1d
+            hold_bars: 20
+            lookback: 260
+            benchmark_symbol: "000300"
+        risk_params:
+          type: object
+          additionalProperties: true
+          example:
+            fee_rate: 0.00025
+            slippage_rate: 0.0005
+            stop_loss: 0.08
+            take_profit: 0.15
+        enabled:
+          type: boolean
+          default: true
+        created_by:
+          type: string
+          example: system

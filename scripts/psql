@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+cd /Users/Apple/Documents/trade/TradeHub
+exec docker compose -f docker-compose.local.yml -p tradehub exec -T postgres psql "$@"

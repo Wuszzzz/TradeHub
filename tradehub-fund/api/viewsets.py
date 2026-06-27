@@ -1,0 +1,2826 @@
+"""
+API ViewSets
+
+实现所有 API 端点
+"""
+import logging
+from rest_framework import viewsets, status, filters
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
+from django.shortcuts import get_object_or_404
+from django.db import models
+from django.db.models import Q, Sum
+from django.utils import timezone
+from decimal import Decimal
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from .models import (
+    Fund, Account, Position, PositionOperation,
+    Watchlist, WatchlistItem, EstimateAccuracy, FundNavHistory,
+    FundAllocationSnapshot, FundCompany, FundDailyFact, FundHoldingSnapshot,
+    FundManager, FundManagerTenure, FundPerformanceRankSnapshot,
+    FundSectorMarketSnapshot,
+    AIConfig, AIPromptTemplate,
+    NotificationChannel, NotificationRule, NotificationLog,
+)
+from .serializers import (
+    FundSerializer, AccountSerializer, PositionSerializer,
+    PositionOperationSerializer, WatchlistSerializer, UserRegisterSerializer,
+    FundNavHistorySerializer, QueryNavSerializer,
+    FundAllocationSnapshotSerializer, FundCompanySerializer, FundDailyFactSerializer,
+    FundHoldingSnapshotSerializer, FundManagerSerializer, FundManagerTenureSerializer,
+    FundPerformanceRankSnapshotSerializer, FundSectorMarketSnapshotSerializer,
+    AIConfigSerializer, AIPromptTemplateSerializer,
+    NotificationChannelSerializer, NotificationRuleSerializer, NotificationLogSerializer,
+)
+from .sources import SourceRegistry
+from .services import recalculate_all_positions
+from fundval.config import config
+
+logger = logging.getLogger(__name__)
+
+
+def apply_fund_ranking_filters(queryset, category=None, min_size=None, max_size=None, industry=None, prefix=''):
+    """Apply common fund ranking filters to Fund or fund-related querysets."""
+    field = lambda name: f'{prefix}{name}'
+    if category:
+        queryset = queryset.filter(**{f'{field("fund_type")}__icontains': category})
+    if min_size:
+        queryset = queryset.filter(**{f'{field("fund_size")}__gte': min_size})
+    if max_size:
+        queryset = queryset.filter(**{f'{field("fund_size")}__lte': max_size})
+    if industry:
+        queryset = queryset.filter(**{
+            f'{field("allocation_snapshots")}__allocation_type': 'industry',
+            f'{field("allocation_snapshots")}__name__icontains': industry,
+        }).distinct()
+    return queryset
+
+
+class FundViewSet(viewsets.ReadOnlyModelViewSet):
+    """基金 ViewSet"""
+
+    queryset = Fund.objects.all()
+    serializer_class = FundSerializer
+    permission_classes = [AllowAny]
+    lookup_field = 'fund_code'
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['fund_code', 'fund_name']
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        # 按类型过滤
+        fund_type = self.request.query_params.get('fund_type')
+        if fund_type:
+            queryset = queryset.filter(fund_type=fund_type)
+
+        return queryset
+
+    def _resolve_holdings_target_code(self, fund):
+        """
+        为指数 / ETF 联接基金解析更可能能查到持仓的目标代码。
+
+        东方财富成分股接口通常对场内 ETF 代码更稳定，联接基金代码经常返回空。
+        这里优先尝试：
+        1. 当前 fund_code
+        2. 若名称含“ETF联接/ETF发起式联接”，抽取 `XXXETF` 关键词，在本地基金表里匹配同名场内 ETF
+        """
+        candidates = [fund.fund_code]
+        name = (fund.fund_name or '').strip()
+        if 'ETF' not in name:
+            return candidates
+
+        import re
+        etf_match = re.search(r'(.+?ETF)', name)
+        company_match = re.match(r'^([\u4e00-\u9fa5]{2,6})', name)
+        if not etf_match:
+            return candidates
+
+        etf_keyword = etf_match.group(1)
+        # 联接 / 发起式等场外描述去掉，只保留 ETF 主题词
+        topic = (
+            etf_keyword
+            .replace('发起式', '')
+            .replace('发起', '')
+            .replace('联接', '')
+            .strip()
+        )
+        company = company_match.group(1) if company_match else ''
+        search_terms = [topic.replace('ETF', '').strip()]
+        if company and search_terms[0].startswith(company):
+            search_terms.append(search_terms[0][len(company):].strip())
+        normalized_terms = []
+        for term in search_terms:
+            cleaned = (
+                term
+                .replace('A股', '')
+                .replace('港股', '')
+                .replace('中证', '')
+                .replace('国证', '')
+                .replace('恒生', '')
+                .strip()
+            )
+            if cleaned and cleaned not in normalized_terms:
+                normalized_terms.append(cleaned)
+        if not normalized_terms:
+            normalized_terms = [search_terms[0]]
+        company_alias = {
+            '广发': 'GF',
+            '国泰': 'GT',
+            '易方达': 'YFD',
+            '华夏': 'HX',
+            '南方': 'NF',
+            '华安': 'HA',
+            '景顺': 'JS',
+            '博时': 'BS',
+        }
+        company_short = company_alias.get(company, '')
+        explicit_name_patterns = []
+        if company and normalized_terms:
+            explicit_name_patterns.append(f"{normalized_terms[0]}ETF{company}")
+            explicit_name_patterns.append(f"{normalized_terms[0]}ETF{company[:2]}")
+
+        peer_qs = Fund.objects.filter(
+            fund_name__contains='ETF',
+            fund_type__contains='指数型',
+        ).exclude(
+            fund_code=fund.fund_code,
+        )
+        if normalized_terms:
+            peer_qs = peer_qs.filter(fund_name__contains=normalized_terms[0])
+        if company:
+            company_qs = peer_qs.filter(fund_name__startswith=company)
+            preferred = list(company_qs.order_by('fund_code').values_list('fund_code', flat=True)[:10])
+        else:
+            preferred = []
+
+        if not preferred:
+            preferred = list(peer_qs.order_by('fund_code').values_list('fund_code', flat=True)[:10])
+
+        # 本地库通常只有联接基金，缺真正场内 ETF；补一层东财全量基金列表扫描
+        if len(preferred) < 3:
+            try:
+                source = SourceRegistry.get_source('eastmoney')
+                if source:
+                    all_funds = source.fetch_fund_list()
+                    topic_text = topic.replace('ETF', '').strip()
+                    market_prefixes = ('15', '51', '56', '58', '59')
+                    external = []
+                    company_matched = []
+                    topic_matched = []
+                    for item in all_funds:
+                        code = item.get('fund_code', '')
+                        name = item.get('fund_name', '')
+                        pinyin = item.get('fund_pinyin', '')
+                        if not code.startswith(market_prefixes):
+                            continue
+                        if 'ETF' not in name:
+                            continue
+                        if normalized_terms and not any(term in name for term in normalized_terms):
+                            continue
+                        if any(pattern and pattern in name for pattern in explicit_name_patterns):
+                            company_matched.append(code)
+                        elif company and company in name:
+                            company_matched.append(code)
+                        elif company_short and company_short in pinyin:
+                            company_matched.append(code)
+                        else:
+                            topic_matched.append(code)
+                    external = company_matched or topic_matched
+                    external.sort(key=lambda code: (0 if code.startswith(market_prefixes) else 1, code))
+                    external_first = []
+                    for code in external[:10]:
+                        if code not in preferred and code not in candidates:
+                            external_first.append(code)
+                    preferred = external_first + preferred
+            except Exception:
+                pass
+
+        for code in preferred:
+            if code not in candidates:
+                candidates.append(code)
+        return candidates
+
+    def list(self, request, *args, **kwargs):
+        """基金列表（分页）"""
+        queryset = self.filter_queryset(self.get_queryset()).order_by('fund_code')
+
+        page_size = int(request.query_params.get('page_size', 20))
+
+        # 手动分页
+        from django.core.paginator import Paginator
+        paginator = Paginator(queryset, page_size)
+        page_number = int(request.query_params.get('page', 1))
+        page = paginator.get_page(page_number)
+
+        serializer = self.get_serializer(page, many=True)
+        return Response({
+            'count': paginator.count,
+            'results': serializer.data
+        })
+
+    @action(detail=True, methods=['get'])
+    def estimate(self, request, fund_code=None):
+        """获取基金估值"""
+        fund = self.get_object()
+        source_name = request.query_params.get('source', 'eastmoney')
+
+        source = SourceRegistry.get_source(source_name)
+        if not source:
+            return Response(
+                {'error': f'数据源 {source_name} 不存在'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # 养基宝需要注入用户 token
+        if source_name == 'yangjibao' and request.user.is_authenticated:
+            from .models import UserSourceCredential
+            credential = UserSourceCredential.objects.filter(
+                user=request.user,
+                source_name='yangjibao',
+                is_active=True,
+            ).first()
+            if credential:
+                source._token = credential.token
+            else:
+                return Response(
+                    {'error': '未登录养基宝，请先扫码登录'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        try:
+            data = source.fetch_estimate(fund_code)
+            return Response(data)
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['get'])
+    def market_quote(self, request, fund_code=None):
+        """获取场内实时价格"""
+        source = SourceRegistry.get_source('sina')
+        if not source:
+            return Response(
+                {'error': '数据源 sina 不存在'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            data = source.fetch_market_quote(fund_code)
+            return Response(data)
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['get'], url_path='community')
+    def community(self, request, fund_code=None):
+        """动态读取基金社区信息，不落库。"""
+        from .services.fund_community import fetch_fund_community
+
+        source = request.query_params.get('source', 'eastmoney_guba')
+        limit = min(int(request.query_params.get('limit') or 20), 50)
+        try:
+            data = fetch_fund_community(fund_code, source=source, limit=limit)
+            return Response(data)
+        except Exception as e:
+            return Response({
+                'fund_code': fund_code,
+                'source': source,
+                'items': [],
+                'count': 0,
+                'community_url': f'https://guba.eastmoney.com/list,of{fund_code}.html',
+                'error': str(e),
+            })
+
+    @action(detail=True, methods=['get'])
+    def index_holdings(self, request, fund_code=None):
+        """获取基金持仓成分股（指数/ETF 基金）"""
+        source_name = request.query_params.get('source', 'eastmoney')
+        source = SourceRegistry.get_source(source_name)
+        if not source:
+            source = SourceRegistry.get_source('eastmoney')
+        if not source:
+            return Response({'holdings': []})
+
+        try:
+            holdings = source.fetch_index_holdings(fund_code)
+            return Response({'fund_code': fund_code, 'holdings': holdings})
+        except Exception as e:
+            logger.error(f'获取成分股失败：{fund_code}, 错误：{e}')
+            return Response({'fund_code': fund_code, 'holdings': []})
+
+    @action(detail=True, methods=['post'], url_path='sync-holdings')
+    def sync_holdings(self, request, fund_code=None):
+        """同步基金披露持仓到数据库"""
+        from datetime import date as date_type
+        from .services.fund_profile import sync_fund_holdings_snapshot
+
+        report_date = request.data.get('report_date') or request.query_params.get('report_date')
+        parsed_report_date = date_type.fromisoformat(report_date) if report_date else None
+        source_name = request.data.get('source') or request.query_params.get('source') or 'tencent_fund'
+        target_code = request.data.get('target_code') or request.query_params.get('target_code')
+
+        result = sync_fund_holdings_snapshot(
+            fund_code,
+            source_name=source_name,
+            report_date=parsed_report_date,
+            target_code=target_code,
+        )
+        return Response(result, status=status.HTTP_200_OK if result.get('success') else status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['post'], url_path='sync-profile')
+    def sync_profile(self, request, fund_code=None):
+        """同步基金基础画像：公司索引、腾讯资产/排名原始信息"""
+        from .services.fund_profile import sync_fund_basic_profile
+
+        source_name = request.data.get('source') or request.query_params.get('source') or 'tencent_fund'
+        target_code = request.data.get('target_code') or request.query_params.get('target_code')
+        result = sync_fund_basic_profile(fund_code, source_name=source_name, target_code=target_code)
+        return Response(result)
+
+    @action(detail=False, methods=['post'], url_path='batch-sync-profile')
+    def batch_sync_profile(self, request):
+        """批量同步基金画像和披露持仓，默认腾讯源"""
+        from .services.fund_profile import sync_fund_basic_profile, sync_fund_holdings_snapshot
+
+        fund_codes = request.data.get('fund_codes') or []
+        limit = int(request.data.get('limit') or 50)
+        sync_holdings = bool(request.data.get('sync_holdings', True))
+        source_name = request.data.get('source') or 'tencent_fund'
+
+        if not fund_codes:
+            fund_codes = list(Fund.objects.order_by('fund_code').values_list('fund_code', flat=True)[:limit])
+
+        results = {}
+        for code in fund_codes[:limit]:
+            try:
+                profile_result = sync_fund_basic_profile(code, source_name=source_name)
+                holding_result = None
+                if sync_holdings:
+                    holding_result = sync_fund_holdings_snapshot(code, source_name=source_name)
+                results[code] = {
+                    'success': True,
+                    'profile': profile_result,
+                    'holdings': holding_result,
+                }
+            except Exception as e:
+                results[code] = {'success': False, 'error': str(e)}
+
+        return Response(results)
+
+    @action(detail=True, methods=['get'], url_path='holdings-stored')
+    def holdings_stored(self, request, fund_code=None):
+        """读取最新或指定日期的已入库基金披露持仓"""
+        fund = self.get_object()
+        queryset = FundHoldingSnapshot.objects.filter(fund=fund).prefetch_related('items')
+        report_date = request.query_params.get('report_date')
+        source = request.query_params.get('source')
+        if report_date:
+            queryset = queryset.filter(report_date=report_date)
+        if source:
+            queryset = queryset.filter(source=source)
+        snapshot = queryset.order_by('-report_date', '-updated_at').first()
+        if not snapshot:
+            return Response({'fund_code': fund_code, 'snapshot': None, 'items': []})
+        serializer = FundHoldingSnapshotSerializer(snapshot)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='market-indices')
+    def market_indices(self, request):
+        """GET /api/funds/market-indices/ — 大盘指数实时行情"""
+        indices = [
+            ('sh000001', '上证指数'),
+            ('sz399001', '深证成指'),
+            ('sz399006', '创业板指'),
+            ('sh000688', '科创50'),
+        ]
+        sina = SourceRegistry.get_source('sina')
+        result = []
+        import requests as req
+        for code, name in indices:
+            price = change = None
+            try:
+                url = f'http://hq.sinajs.cn/list={code}'
+                resp = req.get(url, headers={'Referer': 'http://finance.sina.com.cn'}, timeout=10)
+                resp.encoding = 'gbk'
+                import re
+                match = re.search(r'"(.*)"', resp.text)
+                if match and match.group(1):
+                    parts = match.group(1).split(',')
+                    if len(parts) >= 4:
+                        current_price = parts[3]
+                        prev_close = parts[2]
+                        if current_price and current_price != '0.000':
+                            price = current_price
+                            if prev_close and prev_close != '0.000':
+                                change = round((float(current_price) - float(prev_close)) / float(prev_close) * 100, 2)
+            except Exception:
+                pass
+            result.append({
+                'code': code, 'name': name,
+                'price': str(price) if price else None,
+                'change_percent': str(change) if change is not None else None,
+            })
+        return Response({'indices': result})
+
+    @action(detail=False, methods=['get'], url_path='rankings')
+    def rankings(self, request):
+        """GET /api/funds/rankings/?type=gain&category=股票型 — 排行榜"""
+        from django.db.models import Count, Avg
+        from django.core.paginator import Paginator
+
+        rank_type = request.query_params.get('type', 'gain')
+        category = request.query_params.get('category', '')
+        industry = request.query_params.get('industry')
+        min_size = request.query_params.get('min_size')
+        max_size = request.query_params.get('max_size')
+        period = request.query_params.get('period', 'day')
+        rank_date = request.query_params.get('rank_date')
+        page = int(request.query_params.get('page', 1))
+        page_size = 20
+
+        if rank_type == 'popular':
+            snapshot_qs = FundPerformanceRankSnapshot.objects.select_related('fund').filter(
+                rank_type='popular',
+                period=period,
+            )
+            if rank_date:
+                snapshot_qs = snapshot_qs.filter(rank_date=rank_date)
+            else:
+                latest_date = snapshot_qs.order_by('-rank_date').values_list('rank_date', flat=True).first()
+                if latest_date:
+                    snapshot_qs = snapshot_qs.filter(rank_date=latest_date)
+            snapshot_qs = apply_fund_ranking_filters(snapshot_qs, category, min_size, max_size, industry, prefix='fund__')
+            snapshot_qs = snapshot_qs.order_by('-rank_date', 'rank')
+            return Response({
+                'count': snapshot_qs.count(),
+                'results': [
+                    {
+                        'fund_code': item.fund.fund_code,
+                        'fund_name': item.fund.fund_name,
+                        'fund_type': item.fund.fund_type,
+                        'fund_size': str(item.fund.fund_size) if item.fund.fund_size else None,
+                        'fund_size_text': item.fund.fund_size_text,
+                        'rank_date': item.rank_date.isoformat() if item.rank_date else None,
+                        'period': item.period,
+                        'rank': item.rank,
+                        'pos_count': item.raw_data.get('popularity_score') or item.growth,
+                        'position_count': item.raw_data.get('position_count'),
+                        'watchlist_count': item.raw_data.get('watchlist_count'),
+                        'source': item.source,
+                    }
+                    for item in snapshot_qs[:page_size]
+                ],
+            })
+        elif rank_type == 'accuracy':
+            from django.db.models.functions import Abs
+            queryset = Fund.objects.annotate(
+                avg_error=Avg(Abs('accuracy_records__error_rate'))
+            ).filter(avg_error__isnull=False).order_by('avg_error')
+        else:
+            queryset = Fund.objects.exclude(estimate_growth__isnull=True).order_by('-estimate_growth')
+
+        queryset = apply_fund_ranking_filters(queryset, category, min_size, max_size, industry)
+
+        paginator = Paginator(queryset, page_size)
+        page_obj = paginator.get_page(page)
+
+        results = []
+        for f in page_obj:
+            item = {
+                'fund_code': f.fund_code, 'fund_name': f.fund_name,
+                'fund_type': f.fund_type,
+                'fund_size': str(f.fund_size) if f.fund_size else None,
+                'fund_size_text': f.fund_size_text,
+                'latest_nav': str(f.latest_nav) if f.latest_nav else None,
+                'estimate_growth': str(f.estimate_growth) if f.estimate_growth else None,
+            }
+            if rank_type == 'popular':
+                item['pos_count'] = getattr(f, 'pos_count', 0)
+            if rank_type == 'accuracy':
+                item['avg_error'] = str(round(getattr(f, 'avg_error', 0) or 0, 4))
+            results.append(item)
+
+        return Response({'count': paginator.count, 'results': results})
+
+    @action(detail=False, methods=['get'], url_path='compare')
+    def compare(self, request):
+        """GET /api/funds/compare/?codes=000001,161725 — 多基金对比"""
+        from datetime import date, timedelta
+        from decimal import Decimal
+        from django.db.models import Min, Max
+
+        codes_str = request.query_params.get('codes', '')
+        codes = [c.strip() for c in codes_str.split(',') if c.strip()]
+
+        if len(codes) < 2:
+            return Response({'error': '至少选择 2 只基金'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(codes) > 5:
+            return Response({'error': '最多对比 5 只基金'}, status=status.HTTP_400_BAD_REQUEST)
+
+        funds = Fund.objects.filter(fund_code__in=codes)
+        fund_map = {f.fund_code: f for f in funds}
+
+        today = date.today()
+        periods = {'1m': 30, '3m': 90, '6m': 180, '1y': 365}
+
+        def calc_returns(nav_list):
+            result = {}
+            for period_name, days in periods.items():
+                cutoff = today - timedelta(days=days)
+                start_nav = None
+                for n in nav_list:
+                    if n.nav_date <= cutoff:
+                        start_nav = n
+                end_nav = nav_list[-1] if nav_list else None
+                if start_nav and end_nav and start_nav.unit_nav > 0:
+                    result[period_name] = str(round((end_nav.unit_nav - start_nav.unit_nav) / start_nav.unit_nav * 100, 2))
+                else:
+                    result[period_name] = None
+            return result
+
+        def calc_metrics(nav_list):
+            if len(nav_list) < 60:
+                return {'max_drawdown': None, 'volatility': None, 'sharpe': None}
+
+            vals = [float(n.unit_nav) for n in nav_list]
+            # 最大回撤
+            peak = vals[0]
+            max_dd = 0.0
+            for v in vals:
+                if v > peak:
+                    peak = v
+                dd = (peak - v) / peak if peak > 0 else 0
+                if dd > max_dd:
+                    max_dd = dd
+
+            # 波动率（年化标准差，按 252 个交易日）
+            daily_returns = [(vals[i] - vals[i-1]) / vals[i-1] for i in range(1, len(vals))]
+            if len(daily_returns) < 2:
+                return {'max_drawdown': str(round(-max_dd * 100, 2)), 'volatility': None, 'sharpe': None}
+
+            mean = sum(daily_returns) / len(daily_returns)
+            variance = sum((r - mean) ** 2 for r in daily_returns) / (len(daily_returns) - 1)
+            annual_vol = (variance ** 0.5) * (252 ** 0.5)
+
+            # 夏普比率 (无风险利率 2%)
+            avg_daily = mean
+            annual_return = avg_daily * 252
+            sharpe = (annual_return - 0.02) / annual_vol if annual_vol > 0 else None
+
+            return {
+                'max_drawdown': str(round(-max_dd * 100, 2)),
+                'volatility': str(round(annual_vol * 100, 2)),
+                'sharpe': str(round(sharpe, 2)) if sharpe is not None else None,
+            }
+
+        result = []
+        for code in codes:
+            fund = fund_map.get(code)
+            if not fund:
+                continue
+            nav_list = list(FundNavHistory.objects.filter(
+                fund=fund, nav_date__lte=today
+            ).order_by('nav_date'))
+
+            returns = calc_returns(nav_list) if nav_list else {k: None for k in periods}
+            metrics = calc_metrics(nav_list) if nav_list else {'max_drawdown': None, 'volatility': None, 'sharpe': None}
+
+            result.append({
+                'fund_code': fund.fund_code,
+                'fund_name': fund.fund_name,
+                'fund_type': fund.fund_type or '未知',
+                'latest_nav': str(fund.latest_nav) if fund.latest_nav else None,
+                'returns': returns,
+                'metrics': metrics,
+            })
+
+        return Response({'funds': result})
+
+    @action(detail=True, methods=['get'], url_path='estimate-intraday')
+    def estimate_intraday(self, request, fund_code=None):
+        """获取当日盘中估值快照曲线"""
+        from datetime import date
+        from .models import EstimateSnapshot
+
+        fund = self.get_object()
+        source = request.query_params.get('source', 'eastmoney')
+        today = date.today()
+
+        snapshots = EstimateSnapshot.objects.filter(
+            fund=fund,
+            timestamp__date=today,
+        )
+        if source and source != 'all':
+            snapshots = snapshots.filter(source=source)
+        snapshots = snapshots.order_by('timestamp')
+
+        return Response({
+            'fund_code': fund_code,
+            'snapshots': [{
+                'source': s.source,
+                'timestamp': s.timestamp.isoformat(),
+                'estimate_nav': str(s.estimate_nav),
+                'estimate_growth': str(s.estimate_growth) if s.estimate_growth is not None else None,
+            } for s in snapshots],
+        })
+
+    @action(detail=True, methods=['get'], url_path='holdings-realtime')
+    def holdings_realtime(self, request, fund_code=None):
+        """获取基金持仓 + 实时个股行情"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from decimal import Decimal
+
+        fund = self.get_object()
+
+        # 1. 获取持仓权重
+        eastmoney = SourceRegistry.get_source('eastmoney')
+        if not eastmoney:
+            return Response({'fund_code': fund_code, 'holdings': []})
+
+        holdings = []
+        target_code = fund_code
+        holdings_source = 'eastmoney'
+        for candidate_code in self._resolve_holdings_target_code(fund):
+            try:
+                candidate_holdings = eastmoney.fetch_index_holdings(candidate_code)
+            except Exception as e:
+                logger.error(f'获取持仓失败：{candidate_code}, 错误：{e}')
+                continue
+            if candidate_holdings:
+                holdings = candidate_holdings
+                target_code = candidate_code
+                holdings_source = 'eastmoney'
+                break
+
+        if not holdings:
+            tencent_fund = SourceRegistry.get_source('tencent_fund')
+            if tencent_fund:
+                for candidate_code in self._resolve_holdings_target_code(fund):
+                    market_code = candidate_code
+                    if candidate_code.startswith(('15', '16', '18', '30', '00')):
+                        market_code = f'sz{candidate_code}'
+                    elif candidate_code.startswith(('50', '51', '52', '56', '58', '59', '60', '68')):
+                        market_code = f'sh{candidate_code}'
+                    candidate_holdings = tencent_fund.fetch_index_holdings(market_code)
+                    if candidate_holdings:
+                        holdings = candidate_holdings
+                        target_code = market_code
+                        holdings_source = 'tencent_fund'
+                        break
+
+        if not holdings:
+            return Response({'fund_code': fund_code, 'target_code': target_code, 'holdings_source': holdings_source, 'holdings': []})
+
+        # 2. 并发获取个股实时行情
+        sina = SourceRegistry.get_source('sina')
+        if not sina:
+            return Response({'fund_code': fund_code, 'holdings': holdings})
+
+        stock_codes = [h['stock_code'] for h in holdings]
+        quotes = {}
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(sina.fetch_market_quote, code): code
+                      for code in stock_codes}
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    quote = future.result()
+                    if quote:
+                        quotes[code] = quote
+                except Exception as e:
+                    logger.warning(f'获取 {code} 行情失败: {e}')
+
+        # 3. 合并数据 + 计算 contribution
+        result = []
+        total_weight = Decimal('0')
+        for h in holdings:
+            weight = h.get('weight', Decimal('0'))
+            total_weight += weight
+            q = quotes.get(h['stock_code'], {})
+            price = q.get('market_price')
+            change = q.get('market_growth')
+            contribution = None
+            if change is not None and weight:
+                contribution = (weight * change / Decimal('100')).quantize(Decimal('0.0001'))
+            result.append({
+                'stock_code': h['stock_code'],
+                'stock_name': h['stock_name'],
+                'weight': str(weight),
+                'price': str(price) if price is not None else None,
+                'change_percent': str(change) if change is not None else None,
+                'contribution': str(contribution) if contribution is not None else None,
+            })
+
+        return Response({
+            'fund_code': fund_code,
+            'target_code': target_code,
+            'holdings_source': holdings_source,
+            'total_weight': str(total_weight),
+            'holdings': result,
+        })
+
+    @action(detail=True, methods=['get'])
+    def accuracy(self, request, fund_code=None):
+        """获取基金各数据源准确率"""
+        fund = self.get_object()
+        days = int(request.query_params.get('days', 100))
+
+        # 获取最近 N 天的准确率记录
+        records = EstimateAccuracy.objects.filter(
+            fund=fund,
+            error_rate__isnull=False
+        ).order_by('-estimate_date')[:days]
+
+        # 按数据源分组统计
+        result = {}
+        for record in records:
+            source_name = record.source_name
+            if source_name not in result:
+                result[source_name] = {
+                    'records': [],
+                    'total_error': Decimal('0'),
+                    'count': 0
+                }
+
+            result[source_name]['records'].append({
+                'date': record.estimate_date,
+                'estimate_nav': record.estimate_nav,
+                'actual_nav': record.actual_nav,
+                'error_rate': record.error_rate
+            })
+            result[source_name]['total_error'] += record.error_rate
+            result[source_name]['count'] += 1
+
+        # 计算平均误差率
+        for source_name, data in result.items():
+            if data['count'] > 0:
+                data['avg_error_rate'] = data['total_error'] / data['count']
+            else:
+                data['avg_error_rate'] = Decimal('0')
+
+            data['record_count'] = data['count']
+            del data['total_error']
+            del data['count']
+
+        return Response(result)
+
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    def batch_estimate(self, request):
+        """
+        批量获取基金估值（带缓存）
+
+        请求体:
+        {
+            "fund_codes": ["000001", "000002", ...]
+        }
+
+        响应:
+        {
+            "000001": {
+                "fund_code": "000001",
+                "fund_name": "华夏成长",
+                "estimate_nav": "1.2345",
+                "estimate_growth": "1.23",
+                "estimate_time": "2026-02-11T14:30:00Z",
+                "latest_nav": "1.2200",
+                "from_cache": true
+            },
+            ...
+        }
+        """
+        fund_codes = request.data.get('fund_codes', [])
+        source_name = request.data.get('source', 'eastmoney')
+        ttl_minutes = config.get('estimate_cache_ttl', 5)
+
+        if not fund_codes:
+            return Response({'error': '缺少 fund_codes 参数'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 查询数据库
+        funds = Fund.objects.filter(fund_code__in=fund_codes)
+        fund_map = {f.fund_code: f for f in funds}
+
+        results = {}
+        need_fetch = []  # 需要从数据源获取的基金
+
+        # 检查缓存
+        now = timezone.now()
+        for code in fund_codes:
+            fund = fund_map.get(code)
+            if not fund:
+                results[code] = {'error': '基金不存在'}
+                continue
+
+            # 检查缓存是否有效
+            if (fund.estimate_nav and fund.estimate_time and
+                (now - fund.estimate_time).total_seconds() < ttl_minutes * 60):
+                # 缓存命中
+                results[code] = {
+                    'fund_code': code,
+                    'fund_name': fund.fund_name,
+                    'estimate_nav': str(fund.estimate_nav),
+                    'estimate_growth': str(fund.estimate_growth) if fund.estimate_growth else None,
+                    'estimate_time': fund.estimate_time.isoformat(),
+                    'latest_nav': str(fund.latest_nav) if fund.latest_nav else None,
+                    'latest_nav_date': fund.latest_nav_date.isoformat() if fund.latest_nav_date else None,
+                    'from_cache': True
+                }
+            else:
+                # 缓存失效，需要重新获取
+                need_fetch.append(code)
+
+        # 从数据源获取
+        if need_fetch:
+            source = SourceRegistry.get_source(source_name) or SourceRegistry.get_source('eastmoney')
+
+            # 养基宝需要注入用户 token
+            if source_name == 'yangjibao' and request.user.is_authenticated:
+                from .models import UserSourceCredential
+                credential = UserSourceCredential.objects.filter(
+                    user=request.user,
+                    source_name='yangjibao',
+                    is_active=True,
+                ).first()
+                if credential:
+                    source._token = credential.token
+
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(source.fetch_estimate, code): code
+                          for code in need_fetch}
+
+                for future in as_completed(futures):
+                    code = futures[future]
+                    try:
+                        data = future.result()
+                        fund = fund_map.get(code)
+
+                        if fund and data:
+                            # 更新数据库
+                            fund.estimate_nav = data.get('estimate_nav')
+                            fund.estimate_growth = data.get('estimate_growth')
+                            fund.estimate_time = timezone.now()
+                            fund.save(update_fields=['estimate_nav', 'estimate_growth', 'estimate_time'])
+                            from .services.daily_fact import upsert_latest_estimate_fact
+                            upsert_latest_estimate_fact(fund)
+
+                            results[code] = {
+                                'fund_code': code,
+                                'fund_name': fund.fund_name,
+                                'estimate_nav': str(data.get('estimate_nav')),
+                                'estimate_growth': str(data.get('estimate_growth')),
+                                'estimate_time': fund.estimate_time.isoformat(),
+                                'latest_nav': str(fund.latest_nav) if fund.latest_nav else None,
+                                'latest_nav_date': fund.latest_nav_date.isoformat() if fund.latest_nav_date else None,
+                                'from_cache': False
+                            }
+                    except Exception as e:
+                        results[code] = {
+                            'fund_code': code,
+                            'error': f'获取估值失败: {str(e)}'
+                        }
+
+        return Response(results)
+
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    def batch_update_nav(self, request):
+        """
+        批量更新基金净值
+
+        请求体:
+        {
+            "fund_codes": ["000001", "000002", ...]
+        }
+
+        响应:
+        {
+            "000001": {
+                "fund_code": "000001",
+                "latest_nav": "1.2200",
+                "latest_nav_date": "2026-02-11"
+            },
+            ...
+        }
+        """
+        fund_codes = request.data.get('fund_codes', [])
+
+        if not fund_codes:
+            return Response({'error': '缺少 fund_codes 参数'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 查询数据库
+        funds = Fund.objects.filter(fund_code__in=fund_codes)
+        fund_map = {f.fund_code: f for f in funds}
+
+        results = {}
+        source = SourceRegistry.get_source('eastmoney')
+
+        # 并发获取净值
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(source.fetch_realtime_nav, code): code
+                      for code in fund_codes if code in fund_map}
+
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    data = future.result()
+                    fund = fund_map.get(code)
+
+                    if fund and data:
+                        # 核心修正：绝不覆盖较新的日期
+                        new_date = data.get('nav_date')
+                        if not fund.latest_nav_date or (new_date and new_date >= fund.latest_nav_date):
+                            fund.latest_nav = data.get('nav')
+                            fund.latest_nav_date = new_date
+                            fund.save(update_fields=['latest_nav', 'latest_nav_date', 'updated_at'])
+
+                        results[code] = {
+                            'fund_code': code,
+                            'latest_nav': str(fund.latest_nav),
+                            'latest_nav_date': fund.latest_nav_date.isoformat() if fund.latest_nav_date else None,
+                        }
+                except Exception as e:
+                    results[code] = {
+                        'fund_code': code,
+                        'error': f'获取净值失败: {str(e)}'
+                    }
+
+        return Response(results)
+
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    def batch_update_today_nav(self, request):
+        """
+        批量更新基金当日确认净值
+
+        请求体:
+        {
+            "fund_codes": ["000001", "000002", ...]
+        }
+
+        响应:
+        {
+            "000001": {
+                "fund_code": "000001",
+                "latest_nav": "1.2200",
+                "latest_nav_date": "2026-02-24",
+                "updated": true
+            },
+            "000002": {
+                "fund_code": "000002",
+                "updated": false,
+                "reason": "非当日净值"
+            },
+            ...
+        }
+        """
+        from datetime import date as date_type
+
+        fund_codes = request.data.get('fund_codes', [])
+
+        if not fund_codes:
+            return Response({'error': '缺少 fund_codes 参数'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 查询数据库
+        funds = Fund.objects.filter(fund_code__in=fund_codes)
+        fund_map = {f.fund_code: f for f in funds}
+
+        results = {}
+        source = SourceRegistry.get_source('eastmoney')
+        today = date_type.today()
+
+        # 并发获取当日净值
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(source.fetch_today_nav, code): code
+                      for code in fund_codes if code in fund_map}
+
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    data = future.result()
+                    fund = fund_map.get(code)
+
+                    if not data:
+                        results[code] = {
+                            'fund_code': code,
+                            'updated': False,
+                            'reason': '获取净值失败'
+                        }
+                        continue
+
+                    # 日期校验：只有当日净值才更新
+                    if data['nav_date'] != today:
+                        results[code] = {
+                            'fund_code': code,
+                            'updated': False,
+                            'reason': f'非当日净值（{data["nav_date"]}）'
+                        }
+                        continue
+
+                    if fund:
+                        # 更新数据库
+                        fund.latest_nav = data.get('nav')
+                        fund.latest_nav_date = data.get('nav_date')
+                        fund.save(update_fields=['latest_nav', 'latest_nav_date'])
+
+                        results[code] = {
+                            'fund_code': code,
+                            'latest_nav': str(data.get('nav')),
+                            'latest_nav_date': data.get('nav_date').isoformat() if data.get('nav_date') else None,
+                            'updated': True
+                        }
+                except Exception as e:
+                    results[code] = {
+                        'fund_code': code,
+                        'updated': False,
+                        'error': f'获取净值失败: {str(e)}'
+                    }
+
+        return Response(results)
+
+    @action(detail=False, methods=['post'])
+    def query_nav(self, request):
+        """
+        查询持仓操作净值
+
+        POST /api/funds/query_nav/
+        {
+            "fund_code": "000001",
+            "operation_date": "2024-01-15",
+            "before_15": true
+        }
+
+        响应：
+        {
+            "fund_code": "000001",
+            "fund_name": "华夏成长混合",
+            "nav": "1.2345",
+            "nav_date": "2024-01-14",
+            "source": "history"  // 或 "latest"
+        }
+        """
+        from datetime import timedelta
+        from .utils.trading_calendar import get_last_trading_day
+
+        serializer = QueryNavSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        fund_code = serializer.validated_data['fund_code']
+        operation_date = serializer.validated_data['operation_date']
+        before_15 = serializer.validated_data['before_15']
+
+        # 1. 获取基金
+        fund = get_object_or_404(Fund, fund_code=fund_code)
+
+        # 2. 计算查询日期
+        if before_15:
+            query_date = get_last_trading_day(operation_date - timedelta(days=1))
+        else:
+            query_date = get_last_trading_day(operation_date)
+
+        # 3. 查询历史净值
+        nav_history = FundNavHistory.objects.filter(
+            fund=fund,
+            nav_date=query_date
+        ).first()
+
+        if nav_history:
+            return Response({
+                'fund_code': fund_code,
+                'fund_name': fund.fund_name,
+                'nav': str(nav_history.unit_nav),
+                'nav_date': str(nav_history.nav_date),
+                'source': 'history'
+            })
+
+        # 4. 如果没有历史净值，尝试从数据源同步
+        from .services.nav_history import sync_nav_history
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            logger.info(f'尝试同步 {fund_code} 在 {query_date} 的净值')
+            count = sync_nav_history(fund_code, query_date, query_date)
+            logger.info(f'同步完成，新增/更新 {count} 条记录')
+
+            # 再次查询
+            nav_history = FundNavHistory.objects.filter(
+                fund=fund,
+                nav_date=query_date
+            ).first()
+
+            if nav_history:
+                logger.info(f'同步后查询成功：{fund_code} {query_date} = {nav_history.unit_nav}')
+                return Response({
+                    'fund_code': fund_code,
+                    'fund_name': fund.fund_name,
+                    'nav': str(nav_history.unit_nav),
+                    'nav_date': str(nav_history.nav_date),
+                    'source': 'synced'
+                })
+            else:
+                logger.warning(f'同步后仍未找到数据：{fund_code} {query_date}')
+        except Exception as e:
+            logger.warning(f'同步净值失败：{fund_code} {query_date}, 错误：{e}', exc_info=True)
+
+        # 5. fallback 到 Fund.latest_nav
+        if fund.latest_nav:
+            return Response({
+                'fund_code': fund_code,
+                'fund_name': fund.fund_name,
+                'nav': str(fund.latest_nav),
+                'nav_date': str(fund.latest_nav_date) if fund.latest_nav_date else None,
+                'source': 'latest'
+            })
+
+        # 6. 没有数据
+        return Response(
+            {'error': '净值数据未找到'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAdminUser])
+    def sync(self, request):
+        """同步基金列表（管理员）"""
+        source = SourceRegistry.get_source('eastmoney')
+        if not source:
+            return Response(
+                {'error': '数据源 eastmoney 未注册'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        try:
+            funds = source.fetch_fund_list()
+
+            created_count = 0
+            updated_count = 0
+
+            for fund_data in funds:
+                fund, created = Fund.objects.update_or_create(
+                    fund_code=fund_data['fund_code'],
+                    defaults={
+                        'fund_name': fund_data['fund_name'],
+                        'fund_type': fund_data['fund_type'],
+                    }
+                )
+
+                if created:
+                    created_count += 1
+                else:
+                    updated_count += 1
+
+            return Response({
+                'created': created_count,
+                'updated': updated_count,
+                'total': len(funds)
+            })
+
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class AccountViewSet(viewsets.ModelViewSet):
+    """账户 ViewSet"""
+
+    serializer_class = AccountSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """只返回当前用户的账户（优化查询）"""
+        queryset = Account.objects.filter(user=self.request.user)
+
+        # 优化：预加载子账户和持仓数据
+        queryset = queryset.prefetch_related(
+            'children',  # 预加载子账户
+            'children__positions',  # 预加载子账户的持仓
+            'children__positions__fund',  # 预加载持仓的基金
+            'positions',  # 预加载自己的持仓
+            'positions__fund',  # 预加载持仓的基金
+        )
+
+        return queryset
+
+    def perform_create(self, serializer):
+        """创建账户时自动设置用户"""
+        serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['get'])
+    def positions(self, request, pk=None):
+        """获取账户的所有持仓"""
+        account = self.get_object()
+        positions = Position.objects.filter(account=account).select_related('fund')
+        serializer = PositionSerializer(positions, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'])
+    def delete_info(self, request, pk=None):
+        """获取账户删除信息（用于前端确认对话框）"""
+        from decimal import Decimal
+        import logging
+
+        logger = logging.getLogger(__name__)
+        account = self.get_object()
+
+        # 检查是否为默认账户
+        if account.is_default:
+            return Response({
+                'can_delete': False,
+                'is_default': True,
+                'message': '默认账户不能删除',
+                'children_count': 0,
+                'positions_count': 0,
+                'total_cost': '0.00',
+            })
+
+        # 统计子账户数量
+        children_count = account.children.count()
+
+        # 统计持仓数量和总成本（包括子账户的持仓）
+        all_account_ids = [account.id]
+        if children_count > 0:
+            all_account_ids.extend(account.children.values_list('id', flat=True))
+
+        positions = Position.objects.filter(account_id__in=all_account_ids)
+        positions_count = positions.count()
+        total_cost = positions.aggregate(
+            total=models.Sum('holding_cost')
+        )['total'] or Decimal('0')
+
+        logger.info(
+            f"Account delete info: user={request.user.username}, "
+            f"account={account.name}, children={children_count}, "
+            f"positions={positions_count}, cost={total_cost}"
+        )
+
+        return Response({
+            'can_delete': True,
+            'is_default': False,
+            'message': '',
+            'children_count': children_count,
+            'positions_count': positions_count,
+            'total_cost': str(total_cost),
+        })
+
+    def destroy(self, request, *args, **kwargs):
+        """删除账户（增加安全检查和日志）"""
+        import logging
+
+        logger = logging.getLogger(__name__)
+        account = self.get_object()
+
+        # 检查是否为默认账户
+        if account.is_default:
+            logger.warning(
+                f"Attempt to delete default account: user={request.user.username}, "
+                f"account={account.name}"
+            )
+            return Response(
+                {'detail': '默认账户不能删除'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 记录删除操作日志
+        children_count = account.children.count()
+        positions_count = Position.objects.filter(
+            account__in=[account.id] + list(account.children.values_list('id', flat=True))
+        ).count()
+
+        logger.info(
+            f"Deleting account: user={request.user.username}, "
+            f"account={account.name}, children={children_count}, "
+            f"positions={positions_count}"
+        )
+
+        # 执行删除
+        return super().destroy(request, *args, **kwargs)
+
+
+class PositionViewSet(viewsets.ReadOnlyModelViewSet):
+    """持仓 ViewSet"""
+
+    serializer_class = PositionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """只返回当前用户的持仓"""
+        queryset = Position.objects.filter(account__user=self.request.user)
+
+        # 按账户过滤（兼容 account_id 和 account 两种参数名）
+        account_id = self.request.query_params.get('account_id') or self.request.query_params.get('account')
+        if account_id:
+            # 如果是父账户，返回所有子账户的持仓
+            from .models import Account
+            try:
+                account = Account.objects.get(id=account_id, user=self.request.user)
+                if account.parent is None:
+                    # 父账户：返回所有子账户持仓
+                    queryset = queryset.filter(account__parent_id=account_id)
+                else:
+                    # 子账户：直接过滤
+                    queryset = queryset.filter(account_id=account_id)
+            except Account.DoesNotExist:
+                queryset = queryset.none()
+
+        # 按基金过滤
+        fund_code = self.request.query_params.get('fund_code')
+        if fund_code:
+            queryset = queryset.filter(fund__fund_code=fund_code)
+
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        """持仓列表（不分页）"""
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAdminUser])
+    def recalculate(self, request):
+        """重算持仓（管理员）"""
+        account_id = request.data.get('account_id')
+        recalculate_all_positions(account_id=account_id)
+        return Response({'message': '重算完成'})
+
+    @action(detail=True, methods=['delete'])
+    def clear(self, request, pk=None):
+        """清空持仓（删除所有操作流水）"""
+        import logging
+
+        logger = logging.getLogger(__name__)
+        position = self.get_object()
+
+        account_id = position.account.id
+        fund_id = position.fund.id
+
+        # 删除所有操作流水
+        operations = PositionOperation.objects.filter(
+            account_id=account_id,
+            fund_id=fund_id
+        )
+        operation_count = operations.count()
+        operations.delete()
+
+        logger.info(
+            f"Cleared position: user={request.user.username}, "
+            f"account={position.account.name}, fund={position.fund.fund_code}, "
+            f"operations_deleted={operation_count}"
+        )
+
+        # 删除操作后会自动触发持仓重算（通过 signal）
+        # 持仓会变为 0 份额或被删除
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=['get'])
+    def history(self, request):
+        """
+        获取账户历史市值
+
+        GET /api/positions/history/?account_id=xxx&days=30
+
+        响应:
+        [
+            {'date': '2026-02-01', 'value': 10000.00, 'cost': 9500.00},
+            {'date': '2026-02-02', 'value': 10200.00, 'cost': 9500.00},
+            ...
+        ]
+        """
+        from .services.position_history import calculate_account_history
+
+        account_id = request.query_params.get('account_id')
+        days = int(request.query_params.get('days', 30))
+
+        if not account_id:
+            return Response(
+                {'error': '缺少 account_id 参数'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 验证账户归属
+        account = get_object_or_404(Account, id=account_id, user=request.user)
+
+        # 只支持子账户
+        if account.parent is None:
+            return Response(
+                {'error': '暂不支持父账户历史查询'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 计算历史市值
+        result = calculate_account_history(account_id, days)
+
+        return Response(result)
+
+
+class PositionOperationViewSet(viewsets.ModelViewSet):
+    """持仓操作 ViewSet"""
+
+    serializer_class = PositionOperationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        """删除操作需要管理员权限"""
+        if self.action in ['destroy', 'batch_delete']:
+            return [IsAdminUser()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        """只返回当前用户的操作（管理员可以看所有）"""
+        if self.request.user.is_staff:
+            queryset = PositionOperation.objects.all()
+        else:
+            queryset = PositionOperation.objects.filter(account__user=self.request.user)
+
+        # 按账户过滤（兼容 account_id 和 account 两种参数名）
+        account_id = self.request.query_params.get('account_id') or self.request.query_params.get('account')
+        if account_id:
+            from .models import Account
+            try:
+                account = Account.objects.get(id=account_id)
+                if account.parent is None:
+                    queryset = queryset.filter(account__parent_id=account_id)
+                else:
+                    queryset = queryset.filter(account_id=account_id)
+            except Account.DoesNotExist:
+                queryset = queryset.none()
+
+        # 按基金过滤
+        fund_code = self.request.query_params.get('fund_code')
+        if fund_code:
+            queryset = queryset.filter(fund__fund_code=fund_code)
+
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        """操作流水列表（不分页）"""
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAdminUser])
+    def batch_delete(self, request):
+        """批量删除操作（管理员）"""
+        import logging
+        import uuid
+
+        logger = logging.getLogger(__name__)
+        operation_ids = request.data.get('operation_ids', [])
+
+        if not operation_ids:
+            return Response(
+                {'error': '操作 ID 列表不能为空'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 转换为 UUID 对象
+        try:
+            uuid_list = [uuid.UUID(op_id) if isinstance(op_id, str) else op_id for op_id in operation_ids]
+        except (ValueError, AttributeError) as e:
+            return Response(
+                {'error': f'无效的操作 ID: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 查询要删除的操作
+        operations = PositionOperation.objects.filter(id__in=uuid_list)
+        deleted_count = operations.count()
+
+        # 记录日志
+        logger.info(
+            f"Batch deleting operations: user={request.user.username}, "
+            f"count={deleted_count}, ids={operation_ids}"
+        )
+
+        # 删除操作（会自动触发持仓重算）
+        operations.delete()
+
+        return Response({
+            'deleted_count': deleted_count,
+            'message': f'成功删除 {deleted_count} 条操作记录'
+        })
+
+
+class WatchlistViewSet(viewsets.ModelViewSet):
+    """自选列表 ViewSet"""
+
+    serializer_class = WatchlistSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """只返回当前用户的自选列表"""
+        return Watchlist.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        """创建自选列表时自动设置用户"""
+        serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def items(self, request, pk=None):
+        """添加基金到自选"""
+        watchlist = self.get_object()
+        fund_code = request.data.get('fund_code')
+
+        if not fund_code:
+            return Response(
+                {'error': '基金代码不能为空'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            fund = Fund.objects.get(fund_code=fund_code)
+        except Fund.DoesNotExist:
+            return Response(
+                {'error': '基金不存在'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # 检查是否已存在
+        if WatchlistItem.objects.filter(watchlist=watchlist, fund=fund).exists():
+            return Response(
+                {'error': '基金已在自选列表中'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 获取最大 order
+        from django.db.models import Max
+        max_order = WatchlistItem.objects.filter(watchlist=watchlist).aggregate(
+            max_order=Max('order')
+        )['max_order'] or -1
+
+        item = WatchlistItem.objects.create(
+            watchlist=watchlist,
+            fund=fund,
+            order=max_order + 1
+        )
+
+        return Response(
+            {'id': item.id, 'fund_code': fund.fund_code},
+            status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=['delete'], url_path='items/(?P<fund_code>[^/.]+)')
+    def remove_item(self, request, pk=None, fund_code=None):
+        """从自选移除基金"""
+        watchlist = self.get_object()
+
+        try:
+            fund = Fund.objects.get(fund_code=fund_code)
+            item = WatchlistItem.objects.get(watchlist=watchlist, fund=fund)
+            item.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except (Fund.DoesNotExist, WatchlistItem.DoesNotExist):
+            return Response(
+                {'error': '基金不在自选列表中'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    @action(detail=True, methods=['put'])
+    def reorder(self, request, pk=None):
+        """重新排序自选列表"""
+        watchlist = self.get_object()
+
+        # 处理 JSON 和 form data 两种格式
+        if hasattr(request.data, 'lists'):
+            # QueryDict (form data) - 使用 lists() 获取完整的列表
+            fund_codes = dict(request.data.lists()).get('fund_codes', [])
+        else:
+            # 普通 dict (JSON)
+            fund_codes = request.data.get('fund_codes', [])
+
+        if not fund_codes:
+            return Response(
+                {'error': '基金代码列表不能为空'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 更新排序
+        for index, fund_code in enumerate(fund_codes):
+            try:
+                fund = Fund.objects.get(fund_code=fund_code)
+                WatchlistItem.objects.filter(
+                    watchlist=watchlist,
+                    fund=fund
+                ).update(order=index)
+            except Fund.DoesNotExist:
+                pass
+
+        return Response({'message': '排序已更新'})
+
+
+class SourceViewSet(viewsets.ViewSet):
+    """数据源 ViewSet"""
+
+    permission_classes = [AllowAny]
+
+    def list(self, request):
+        """列出所有数据源"""
+        sources = SourceRegistry.list_sources()
+        return Response([{'name': name} for name in sources])
+
+    @action(detail=True, methods=['get'], url_path='accuracy')
+    def accuracy(self, request, pk=None):
+        """获取数据源整体准确率"""
+        source_name = pk
+        days = int(request.query_params.get('days', 100))
+
+        # 获取最近 N 天的准确率记录（按记录数量，不按日期）
+        records = EstimateAccuracy.objects.filter(
+            source_name=source_name,
+            error_rate__isnull=False
+        ).order_by('-estimate_date')[:days]
+
+        if not records.exists():
+            return Response({
+                'avg_error_rate': 0,
+                'record_count': 0
+            })
+
+        total_error = sum(r.error_rate for r in records)
+        count = len(records)
+
+        return Response({
+            'avg_error_rate': total_error / count if count > 0 else 0,
+            'record_count': count
+        })
+
+
+class UserViewSet(viewsets.ViewSet):
+    """用户 ViewSet"""
+
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    def register(self, request):
+        """用户注册"""
+        # 检查是否允许注册
+        if not config.get('allow_register', False):
+            return Response(
+                {'error': '注册未开放'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = UserRegisterSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+
+            # 生成 JWT token
+            from rest_framework_simplejwt.tokens import RefreshToken
+            refresh = RefreshToken.for_user(user)
+
+            return Response({
+                'access_token': str(refresh.access_token),
+                'refresh_token': str(refresh),
+                'user': {
+                    'id': str(user.id),
+                    'username': user.username,
+                }
+            }, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'], url_path='me/summary', permission_classes=[IsAuthenticated])
+    def summary(self, request):
+        """获取用户资产汇总"""
+        user = request.user
+
+        # 统计账户数
+        account_count = Account.objects.filter(user=user).count()
+
+        # 统计持仓数和总成本
+        positions = Position.objects.filter(account__user=user)
+        position_count = positions.count()
+        total_cost = sum(p.holding_cost for p in positions)
+
+        # 计算总市值和总盈亏
+        total_value = Decimal('0')
+        total_pnl = Decimal('0')
+
+        for position in positions:
+            if position.fund.latest_nav:
+                value = position.fund.latest_nav * position.holding_share
+                total_value += value
+                total_pnl += position.pnl
+
+        return Response({
+            'account_count': account_count,
+            'position_count': position_count,
+            'total_cost': total_cost,
+            'total_value': total_value,
+            'total_pnl': total_pnl,
+        })
+
+
+class FundNavHistoryViewSet(viewsets.ReadOnlyModelViewSet):
+    """基金历史净值 ViewSet（只读）"""
+
+    queryset = FundNavHistory.objects.all()
+    serializer_class = FundNavHistorySerializer
+    permission_classes = []  # 不需要认证
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        # 按基金代码过滤
+        fund_code = self.request.query_params.get('fund_code')
+        if fund_code:
+            queryset = queryset.filter(fund__fund_code=fund_code)
+
+        # 按日期范围过滤
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+
+        if start_date:
+            queryset = queryset.filter(nav_date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(nav_date__lte=end_date)
+
+        return queryset
+
+    @action(detail=False, methods=['post'])
+    def batch_query(self, request):
+        """
+        批量查询历史净值
+
+        POST /api/nav-history/batch_query/
+        {
+            "fund_codes": ["000001", "000002"],
+            "start_date": "2024-01-01",  // 可选
+            "end_date": "2024-12-31",    // 可选
+            "nav_date": "2024-06-01"     // 可选，查询单日
+        }
+        """
+        fund_codes = request.data.get('fund_codes', [])
+        start_date = request.data.get('start_date')
+        end_date = request.data.get('end_date')
+        nav_date = request.data.get('nav_date')
+
+        if not fund_codes:
+            return Response(
+                {'error': '缺少 fund_codes 参数'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        results = {}
+        for fund_code in fund_codes:
+            queryset = FundNavHistory.objects.filter(fund__fund_code=fund_code)
+
+            # 单日查询
+            if nav_date:
+                queryset = queryset.filter(nav_date=nav_date)
+            else:
+                # 时间段查询
+                if start_date:
+                    queryset = queryset.filter(nav_date__gte=start_date)
+                if end_date:
+                    queryset = queryset.filter(nav_date__lte=end_date)
+
+            serializer = self.get_serializer(queryset, many=True)
+            results[fund_code] = serializer.data
+
+        return Response(results)
+
+    @action(detail=False, methods=['post'])
+    def sync(self, request):
+        """
+        同步历史净值
+
+        权限规则：
+        - 同步 ≤15 个基金：不需要管理员权限
+        - 同步 >15 个基金：需要管理员权限
+
+        POST /api/nav-history/sync/
+        {
+            "fund_codes": ["000001", "000002"],
+            "start_date": "2024-01-01",  // 可选
+            "end_date": "2024-12-31",    // 可选
+        }
+        """
+        from .services.nav_history import batch_sync_nav_history
+        from datetime import datetime
+
+        fund_codes = request.data.get('fund_codes', [])
+        start_date = request.data.get('start_date')
+        end_date = request.data.get('end_date')
+
+        if not fund_codes:
+            return Response(
+                {'error': '缺少 fund_codes 参数'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 权限检查：超过 15 个基金需要管理员权限
+        if len(fund_codes) > 15:
+            if not request.user.is_authenticated or not request.user.is_staff:
+                return Response(
+                    {'error': '同步超过 15 个基金需要管理员权限'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        # 转换日期格式
+        if start_date:
+            start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+        if end_date:
+            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+
+        results = batch_sync_nav_history(fund_codes, start_date, end_date)
+
+        return Response(results)
+
+
+class FundDailyFactViewSet(viewsets.ReadOnlyModelViewSet):
+    """基金每日事实表"""
+
+    serializer_class = FundDailyFactSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        queryset = FundDailyFact.objects.select_related('fund')
+        fund_code = self.request.query_params.get('fund_code')
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        if fund_code:
+            queryset = queryset.filter(fund__fund_code=fund_code)
+        if start_date:
+            queryset = queryset.filter(trade_date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(trade_date__lte=end_date)
+        return queryset.order_by('-trade_date')
+
+    @action(detail=False, methods=['post'])
+    def backfill(self, request):
+        from .services.daily_fact import backfill_daily_facts
+
+        fund_codes = request.data.get('fund_codes') or None
+        limit = request.data.get('limit')
+        if limit not in (None, ''):
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError):
+                return Response(
+                    {'error': 'limit 必须是数字'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        count = backfill_daily_facts(fund_codes=fund_codes, limit=limit)
+        return Response({'count': count})
+
+
+
+class FundCompanyViewSet(viewsets.ReadOnlyModelViewSet):
+    """基金公司索引"""
+
+    serializer_class = FundCompanySerializer
+    permission_classes = [AllowAny]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['company_code', 'company_name', 'short_name']
+
+    def get_queryset(self):
+        return FundCompany.objects.annotate(
+            manager_count=models.Count('managers', distinct=True),
+            fund_count=models.Count('funds', distinct=True),
+        ).order_by('company_name')
+
+
+class FundManagerViewSet(viewsets.ReadOnlyModelViewSet):
+    """基金经理索引"""
+
+    serializer_class = FundManagerSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['manager_code', 'manager_name', 'company__company_name']
+
+    def get_queryset(self):
+        queryset = FundManager.objects.select_related('company').annotate(
+            fund_count=models.Count('tenures__fund', distinct=True),
+        )
+        company = self.request.query_params.get('company')
+        if company:
+            queryset = queryset.filter(
+                Q(company__company_code=company) | Q(company__company_name__icontains=company)
+            )
+        return queryset.order_by('manager_name')
+
+    @action(detail=True, methods=['get'])
+    def funds(self, request, pk=None):
+        manager = self.get_object()
+        tenures = FundManagerTenure.objects.filter(manager=manager).select_related('fund', 'manager__company')
+        return Response(FundManagerTenureSerializer(tenures, many=True).data)
+
+
+class FundManagerTenureViewSet(viewsets.ReadOnlyModelViewSet):
+    """基金经理任职关系"""
+
+    serializer_class = FundManagerTenureSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        queryset = FundManagerTenure.objects.select_related('fund', 'manager', 'manager__company')
+        fund_code = self.request.query_params.get('fund_code')
+        manager_code = self.request.query_params.get('manager_code')
+        if fund_code:
+            queryset = queryset.filter(fund__fund_code=fund_code)
+        if manager_code:
+            queryset = queryset.filter(manager__manager_code=manager_code)
+        return queryset.order_by('-start_date', 'fund__fund_code')
+
+
+class FundHoldingSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
+    """基金披露持仓快照"""
+
+    serializer_class = FundHoldingSnapshotSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        queryset = FundHoldingSnapshot.objects.select_related('fund').prefetch_related('items')
+        fund_code = self.request.query_params.get('fund_code')
+        asset_code = self.request.query_params.get('asset_code')
+        source = self.request.query_params.get('source')
+        if fund_code:
+            queryset = queryset.filter(fund__fund_code=fund_code)
+        if source:
+            queryset = queryset.filter(source=source)
+        if asset_code:
+            queryset = queryset.filter(items__asset_code=asset_code).distinct()
+        return queryset.annotate(item_count=models.Count('items')).order_by('-report_date', '-updated_at')
+
+
+class FundAllocationSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
+    """基金板块/资产配置快照"""
+
+    serializer_class = FundAllocationSnapshotSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        queryset = FundAllocationSnapshot.objects.select_related('fund')
+        fund_code = self.request.query_params.get('fund_code')
+        allocation_type = self.request.query_params.get('allocation_type')
+        report_date = self.request.query_params.get('report_date')
+        name = self.request.query_params.get('name')
+        if fund_code:
+            queryset = queryset.filter(fund__fund_code=fund_code)
+        if allocation_type:
+            queryset = queryset.filter(allocation_type=allocation_type)
+        if report_date:
+            queryset = queryset.filter(report_date=report_date)
+        if name:
+            queryset = queryset.filter(name__icontains=name)
+        return queryset.order_by('-report_date', 'allocation_type', '-ratio')
+
+
+class FundPerformanceRankSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
+    """基金区间业绩排行快照"""
+
+    serializer_class = FundPerformanceRankSnapshotSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        queryset = FundPerformanceRankSnapshot.objects.select_related('fund')
+        fund_code = self.request.query_params.get('fund_code')
+        period = self.request.query_params.get('period')
+        rank_type = self.request.query_params.get('rank_type') or self.request.query_params.get('type') or 'performance'
+        rank_date = self.request.query_params.get('rank_date')
+        fund_type = self.request.query_params.get('fund_type') or self.request.query_params.get('category')
+        industry = self.request.query_params.get('industry')
+        min_size = self.request.query_params.get('min_size')
+        max_size = self.request.query_params.get('max_size')
+        latest = self.request.query_params.get('latest', '1')
+        if fund_code:
+            queryset = queryset.filter(fund__fund_code=fund_code)
+        if rank_type:
+            queryset = queryset.filter(rank_type=rank_type)
+        if period:
+            queryset = queryset.filter(period=period)
+        if rank_date:
+            queryset = queryset.filter(rank_date=rank_date)
+        elif latest not in ('0', 'false', 'False'):
+            latest_date = queryset.order_by('-rank_date').values_list('rank_date', flat=True).first()
+            if latest_date:
+                queryset = queryset.filter(rank_date=latest_date)
+        queryset = apply_fund_ranking_filters(queryset, fund_type, min_size, max_size, industry, prefix='fund__')
+        return queryset.order_by('-rank_date', 'period', 'rank')
+
+
+class FundSectorMarketSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
+    """基金板块市场行情快照"""
+
+    serializer_class = FundSectorMarketSnapshotSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        queryset = FundSectorMarketSnapshot.objects.all()
+        board_code = self.request.query_params.get('board_code')
+        trade_date = self.request.query_params.get('trade_date')
+        sector_code = self.request.query_params.get('sector_code')
+        keyword = self.request.query_params.get('keyword')
+        latest = self.request.query_params.get('latest', '1')
+        close_only = self.request.query_params.get('close_only')
+
+        if board_code:
+            queryset = queryset.filter(board_code=board_code)
+        if trade_date:
+            queryset = queryset.filter(trade_date=trade_date)
+        if sector_code:
+            queryset = queryset.filter(sector_code=sector_code)
+        if keyword:
+            queryset = queryset.filter(Q(sector_name__icontains=keyword) | Q(leading_stock_name__icontains=keyword))
+        if close_only in ('1', 'true', 'True'):
+            queryset = queryset.filter(is_close_snapshot=True)
+        if latest not in ('0', 'false', 'False'):
+            latest_time = queryset.order_by('-snapshot_time').values_list('snapshot_time', flat=True).first()
+            if latest_time:
+                queryset = queryset.filter(snapshot_time=latest_time)
+        return queryset.order_by('-snapshot_time', '-change_percent')
+
+    @action(detail=False, methods=['post'], url_path='sync')
+    def sync(self, request):
+        from api.services.fund_sector_market import sync_fund_sector_market_snapshots
+
+        result = sync_fund_sector_market_snapshots(
+            board_codes=request.data.get('board_codes') or None,
+            board_code=request.data.get('board_code') or None,
+            sort_type=request.data.get('sort_type') or 'f3',
+            direct=request.data.get('direct') or 'down',
+            count=int(request.data.get('count') or 500),
+            is_close_snapshot=bool(request.data.get('is_close_snapshot')),
+        )
+        return Response(result)
+
+    @action(detail=False, methods=['get'], url_path='rotation-analysis')
+    def rotation_analysis(self, request):
+        from api.services.fund_sector_market import analyze_fund_sector_rotation
+
+        fund_codes = request.query_params.getlist('fund_code')
+        if not fund_codes:
+            raw_codes = request.query_params.get('fund_codes') or ''
+            if raw_codes:
+                fund_codes = [code.strip() for code in raw_codes.split(',') if code.strip()]
+
+        result = analyze_fund_sector_rotation(
+            fund_codes=fund_codes or None,
+            trade_date=request.query_params.get('trade_date') or None,
+            board_code=request.query_params.get('board_code') or 'industry',
+            close_only=request.query_params.get('close_only', '1') not in ('0', 'false', 'False'),
+            page_size=int(request.query_params.get('page_size') or 200),
+        )
+        return Response(result)
+
+
+
+class SourceCredentialViewSet(viewsets.ViewSet):
+    """数据源凭证 ViewSet"""
+
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['post'])
+    def qrcode(self, request):
+        """
+        获取登录二维码
+
+        POST /api/source-credentials/qrcode/
+        {
+            "source_name": "yangjibao"
+        }
+
+        响应:
+        {
+            "qr_id": "qr-123456",
+            "qr_url": "http://weixin.qq.com/q/..."
+        }
+        """
+        from .serializers import QRCodeLoginSerializer
+
+        serializer = QRCodeLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        source_name = serializer.validated_data['source_name']
+        source = SourceRegistry.get_source(source_name)
+
+        try:
+            qr_data = source.get_qrcode()
+
+            if qr_data is None:
+                return Response(
+                    {'error': f'数据源 {source_name} 不支持二维码登录'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            return Response(qr_data)
+        except Exception as e:
+            return Response(
+                {'error': f'获取二维码失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'], url_path='qrcode/(?P<qr_id>[^/.]+)/state')
+    def qrcode_state(self, request, qr_id=None):
+        """
+        检查二维码扫码状态
+
+        GET /api/source-credentials/qrcode/{qr_id}/state/?source_name=yangjibao
+
+        响应:
+        {
+            "state": "waiting",  // waiting/scanned/confirmed/expired
+            "token": null
+        }
+
+        或（登录成功）:
+        {
+            "state": "confirmed",
+            "token": "xxx"
+        }
+        """
+        from .models import UserSourceCredential
+
+        source_name = request.query_params.get('source_name')
+        if not source_name:
+            return Response(
+                {'error': '缺少 source_name 参数'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        source = SourceRegistry.get_source(source_name)
+        if not source:
+            return Response(
+                {'error': f'数据源 {source_name} 不存在'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            state_data = source.check_qrcode_state(qr_id)
+
+            # 如果登录成功，保存凭证
+            if state_data['state'] == 'confirmed' and state_data['token']:
+                token = state_data['token']
+
+                # 更新或创建凭证
+                credential, created = UserSourceCredential.objects.update_or_create(
+                    user=request.user,
+                    source_name=source_name,
+                    defaults={
+                        'token': token,
+                        'is_active': True,
+                    }
+                )
+
+                logger.info(f'用户 {request.user.username} 登录数据源 {source_name} 成功')
+
+            return Response(state_data)
+
+        except Exception as e:
+            return Response(
+                {'error': f'检查二维码状态失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['post'])
+    def logout(self, request):
+        """
+        登出数据源
+
+        POST /api/source-credentials/logout/
+        {
+            "source_name": "yangjibao"
+        }
+        """
+        from .models import UserSourceCredential
+
+        source_name = request.data.get('source_name')
+        if not source_name:
+            return Response(
+                {'error': '缺少 source_name 参数'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # 停用凭证
+            credential = UserSourceCredential.objects.filter(
+                user=request.user,
+                source_name=source_name,
+                is_active=True
+            ).first()
+
+            if credential:
+                credential.is_active = False
+                credential.save()
+
+            # 调用数据源的 logout 方法
+            source = SourceRegistry.get_source(source_name)
+            if source:
+                source.logout()
+
+            return Response({'success': True})
+
+        except Exception as e:
+            return Response(
+                {'error': f'登出失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'])
+    def status(self, request):
+        """
+        查询登录状态
+
+        GET /api/source-credentials/status/?source_name=yangjibao
+
+        响应:
+        {
+            "logged_in": true,
+            "source_name": "yangjibao",
+            "created_at": "2026-02-24T10:00:00Z"
+        }
+        """
+        from .models import UserSourceCredential
+        from .serializers import UserSourceCredentialSerializer
+
+        source_name = request.query_params.get('source_name')
+        if not source_name:
+            return Response(
+                {'error': '缺少 source_name 参数'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        source = SourceRegistry.get_source(source_name)
+        login_type = source.get_login_type() if source else 'none'
+
+        credential = UserSourceCredential.objects.filter(
+            user=request.user,
+            source_name=source_name,
+            is_active=True
+        ).first()
+
+        if credential:
+            serializer = UserSourceCredentialSerializer(credential)
+            return Response({
+                'logged_in': True,
+                'login_type': login_type,
+                **serializer.data
+            })
+        else:
+            return Response({
+                'logged_in': False,
+                'login_type': login_type,
+                'source_name': source_name
+            })
+
+    @action(detail=False, methods=['post'], url_path='phone/send-sms')
+    def phone_send_sms(self, request):
+        """
+        发送手机验证码
+
+        POST /api/source-credentials/phone/send-sms/
+        {
+            "source_name": "xiaobeiyangji",
+            "phone": "13800138000"
+        }
+        """
+        source_name = request.data.get('source_name')
+        phone = request.data.get('phone')
+
+        if not source_name or not phone:
+            return Response(
+                {'error': '缺少 source_name 或 phone 参数'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        source = SourceRegistry.get_source(source_name)
+        if not source:
+            return Response(
+                {'error': f'数据源 {source_name} 不存在'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if source.get_login_type() != 'phone':
+            return Response(
+                {'error': f'数据源 {source_name} 不支持手机号登录'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            source.send_sms(phone)
+            return Response({'message': '验证码已发送'})
+        except Exception as e:
+            return Response(
+                {'error': f'发送验证码失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['post'], url_path='phone/verify')
+    def phone_verify(self, request):
+        """
+        手机号验证码登录
+
+        POST /api/source-credentials/phone/verify/
+        {
+            "source_name": "xiaobeiyangji",
+            "phone": "13800138000",
+            "code": "123456"
+        }
+        """
+        from .models import UserSourceCredential
+
+        source_name = request.data.get('source_name')
+        phone = request.data.get('phone')
+        code = request.data.get('code')
+
+        if not source_name or not phone or not code:
+            return Response(
+                {'error': '缺少 source_name、phone 或 code 参数'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        source = SourceRegistry.get_source(source_name)
+        if not source:
+            return Response(
+                {'error': f'数据源 {source_name} 不存在'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if source.get_login_type() != 'phone':
+            return Response(
+                {'error': f'数据源 {source_name} 不支持手机号登录'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            login_result = source.verify_phone(phone, code)
+            token = login_result['token']
+
+            UserSourceCredential.objects.update_or_create(
+                user=request.user,
+                source_name=source_name,
+                defaults={'token': token, 'is_active': True},
+            )
+
+            logger.info(f'用户 {request.user.username} 登录数据源 {source_name} 成功')
+            return Response({'message': '登录成功', 'source_name': source_name})
+        except Exception as e:
+            return Response(
+                {'error': f'登录失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['post'], url_path='import')
+    def import_from_yangjibao(self, request):
+        """
+        一键导入持仓数据
+
+        POST /api/source-credentials/import/
+        {
+            "source_name": "yangjibao"  // 可选，默认 yangjibao
+        }
+
+        响应:
+        {
+            "accounts_created": 2,
+            "accounts_skipped": 0,
+            "holdings_created": 5,
+            "holdings_skipped": 1,
+        }
+        """
+        from .models import UserSourceCredential
+
+        source_name = request.data.get('source_name', 'yangjibao')
+        overwrite = request.data.get('overwrite', False)
+
+        credential = UserSourceCredential.objects.filter(
+            user=request.user,
+            source_name=source_name,
+            is_active=True,
+        ).first()
+
+        if not credential:
+            return Response(
+                {'error': f'未登录 {source_name}，请先登录'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        source = SourceRegistry.get_source(source_name)
+        if not source:
+            return Response(
+                {'error': f'数据源 {source_name} 不存在'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if source_name == 'xiaobeiyangji' and hasattr(source, 'set_token'):
+            source.set_token(credential.token)
+        else:
+            source._token = credential.token
+
+        try:
+            if source_name == 'xiaobeiyangji':
+                from .services.import_xiaobeiyangji import import_from_xiaobeiyangji
+                result = import_from_xiaobeiyangji(request.user, source, overwrite=overwrite)
+            else:
+                from .sources.yangjibao import YangJiBaoSource
+                from .services.import_yjb import import_from_yangjibao
+                yjb_source = YangJiBaoSource()
+                yjb_source._token = credential.token
+                result = import_from_yangjibao(request.user, yjb_source, overwrite=overwrite)
+
+            return Response(result)
+        except Exception as e:
+            logger.error(f'{source_name} 导入失败: {e}')
+            return Response(
+                {'error': f'导入失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class UserPreferenceViewSet(viewsets.ViewSet):
+    """用户偏好 ViewSet"""
+
+    permission_classes = [IsAuthenticated]
+
+    VALID_SOURCES = {'eastmoney', 'yangjibao', 'xiaobeiyangji'}
+
+    def list(self, request):
+        """
+        GET /api/preferences/
+        返回用户偏好，无记录时返回默认值
+        """
+        from .models import UserPreference
+
+        pref = UserPreference.objects.filter(user=request.user).first()
+        preferred_source = pref.preferred_source if pref else 'eastmoney'
+        theme_mode = pref.theme_mode if pref else 'light'
+        report_enabled = pref.report_enabled if pref else False
+        report_frequency = pref.report_frequency if pref else 'monthly'
+
+        return Response({
+            'preferred_source': preferred_source,
+            'theme_mode': theme_mode,
+            'report_enabled': report_enabled,
+            'report_frequency': report_frequency,
+        })
+
+    def update(self, request, pk=None):
+        """
+        PUT /api/preferences/
+        更新用户偏好（不存在则创建），preferred_source 和 theme_mode 独立更新
+        """
+        from .models import UserPreference
+
+        theme_mode = request.data.get('theme_mode')
+        preferred_source = request.data.get('preferred_source')
+        report_enabled = request.data.get('report_enabled')
+        report_frequency = request.data.get('report_frequency')
+
+        if theme_mode and theme_mode not in dict(UserPreference.THEME_CHOICES):
+            return Response({'error': '无效的主题模式，可选值：light, dark'}, status=status.HTTP_400_BAD_REQUEST)
+        if preferred_source and preferred_source not in self.VALID_SOURCES:
+            return Response({'error': f'无效的数据源，可选值：{", ".join(self.VALID_SOURCES)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        defaults = {}
+        if preferred_source:
+            defaults['preferred_source'] = preferred_source
+        if theme_mode:
+            defaults['theme_mode'] = theme_mode
+        if report_enabled is not None:
+            defaults['report_enabled'] = report_enabled
+        if report_frequency:
+            defaults['report_frequency'] = report_frequency
+
+        if not defaults:
+            return Response(
+                {'error': '请提供 preferred_source 或 theme_mode'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pref, _ = UserPreference.objects.update_or_create(
+            user=request.user,
+            defaults=defaults,
+        )
+
+        return Response({
+            'preferred_source': pref.preferred_source,
+            'theme_mode': pref.theme_mode,
+            'report_enabled': pref.report_enabled,
+            'report_frequency': pref.report_frequency,
+        })
+
+
+class AIConfigViewSet(viewsets.ViewSet):
+    """AI配置 ViewSet"""
+
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        """
+        GET /api/ai/config/
+        返回当前用户AI配置，无记录时返回默认空值
+        """
+        config = AIConfig.objects.filter(user=request.user).first()
+        if config:
+            serializer = AIConfigSerializer(config)
+            return Response(serializer.data)
+        return Response({
+            'api_endpoint': '',
+            'api_key': '',
+            'model_name': 'gpt-4o-mini',
+        })
+
+    def update(self, request, pk=None):
+        """
+        PUT /api/ai/config/
+        创建或更新当前用户AI配置
+        """
+        serializer = AIConfigSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        config, _ = AIConfig.objects.update_or_create(
+            user=request.user,
+            defaults={
+                'api_endpoint': serializer.validated_data['api_endpoint'],
+                'api_key': serializer.validated_data['api_key'],
+                'model_name': serializer.validated_data.get('model_name', 'gpt-4o-mini'),
+            },
+        )
+        return Response(AIConfigSerializer(config).data)
+
+
+class AIPromptTemplateViewSet(viewsets.ModelViewSet):
+    """AI提示词模板 ViewSet"""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = AIPromptTemplateSerializer
+
+    def get_queryset(self):
+        queryset = AIPromptTemplate.objects.filter(user=self.request.user)
+        context_type = self.request.query_params.get('context_type')
+        if context_type:
+            queryset = queryset.filter(context_type=context_type)
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        # 首次访问且无任何模板时，自动创建默认模板
+        if not AIPromptTemplate.objects.filter(user=request.user).exists():
+            _create_default_templates(request.user)
+        return super().list(request, *args, **kwargs)
+
+
+def _create_default_templates(user):
+    """为新用户创建默认提示词模板"""
+    AIPromptTemplate.objects.bulk_create([
+        AIPromptTemplate(
+            user=user,
+            name='基金趋势分析',
+            context_type='fund',
+            is_default=True,
+            system_prompt='你是一位专业的基金分析师，擅长分析基金净值走势和市场趋势。请基于提供的数据给出客观、简洁的分析，避免主观投资建议。',
+            user_prompt=(
+                '请分析以下基金的近期表现：\n\n'
+                '基金代码：{{fund_code}}\n'
+                '基金名称：{{fund_name}}\n'
+                '基金类型：{{fund_type}}\n'
+                '最新净值：{{latest_nav}}\n'
+                '今日估值涨跌：{{estimate_growth}}%\n\n'
+                '近期净值数据：\n{{nav_history}}\n\n'
+                '请从以下维度分析：\n'
+                '1. 近期净值走势特征\n'
+                '2. 今日估值表现\n'
+                '3. 需要关注的风险点'
+            ),
+        ),
+        AIPromptTemplate(
+            user=user,
+            name='持仓健康度分析',
+            context_type='position',
+            is_default=True,
+            system_prompt='你是一位专业的资产配置顾问，擅长分析投资组合的风险与收益结构。请基于提供的持仓数据给出客观分析。',
+            user_prompt=(
+                '请分析以下投资组合的健康度：\n\n'
+                '账户名称：{{account_name}}\n'
+                '总持仓成本：{{holding_cost}} 元\n'
+                '当前市值：{{holding_value}} 元\n'
+                '总盈亏：{{pnl}} 元（{{pnl_rate}}%）\n\n'
+                '持仓明细：\n{{positions}}\n\n'
+                '请从以下维度分析：\n'
+                '1. 整体盈亏状况\n'
+                '2. 持仓集中度风险\n'
+                '3. 各基金表现对比'
+            ),
+        ),
+    ])
+
+
+class NotificationChannelViewSet(viewsets.ModelViewSet):
+    """通知渠道 ViewSet"""
+
+    serializer_class = NotificationChannelSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return NotificationChannel.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def test(self, request, pk=None):
+        """发送测试通知"""
+        channel_obj = self.get_object()
+        from .notifications import ChannelRegistry
+        channel_impl = ChannelRegistry.get_channel(channel_obj.channel_type)
+        if not channel_impl:
+            return Response(
+                {'error': f'未找到渠道实现：{channel_obj.channel_type}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        success = channel_impl.send(
+            title='Fundval 通知测试',
+            content='这是一条测试通知，如果您收到此消息，说明通知渠道配置正确。',
+            config=channel_obj.config,
+        )
+        if success:
+            return Response({'message': '测试通知发送成功'})
+        return Response({'error': '测试通知发送失败，请检查渠道配置'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class NotificationRuleViewSet(viewsets.ModelViewSet):
+    """通知规则 ViewSet"""
+
+    serializer_class = NotificationRuleSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return NotificationRule.objects.filter(
+            user=self.request.user
+        ).select_related('fund').prefetch_related('channels')
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class NotificationLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """通知记录 ViewSet（只读）"""
+
+    serializer_class = NotificationLogSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = NotificationLog.objects.filter(
+            rule__user=self.request.user
+        ).select_related('rule', 'channel').order_by('-trigger_time')
+
+        rule_id = self.request.query_params.get('rule_id')
+        if rule_id:
+            qs = qs.filter(rule_id=rule_id)
+        return qs
+
+
+class AdminViewSet(viewsets.ViewSet):
+    """管理员 ViewSet — 用户管理"""
+
+    permission_classes = [IsAdminUser]
+
+    def list(self, request):
+        """GET /api/admin/users/ — 用户列表（分页 + 搜索）"""
+        from django.contrib.auth import get_user_model
+        from django.core.paginator import Paginator
+
+        User = get_user_model()
+        queryset = User.objects.all().order_by('-date_joined')
+
+        search = request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(username__icontains=search)
+
+        page_size = int(request.query_params.get('page_size', 20))
+        page_number = int(request.query_params.get('page', 1))
+        paginator = Paginator(queryset, page_size)
+        page = paginator.get_page(page_number)
+
+        results = [{
+            'id': str(u.id),
+            'username': u.username,
+            'email': u.email,
+            'role': 'admin' if u.is_superuser else 'user',
+            'is_active': u.is_active,
+            'date_joined': u.date_joined.isoformat(),
+        } for u in page]
+
+        return Response({'count': paginator.count, 'results': results})
+
+    @action(detail=False, methods=['post'], url_path=r'(?P<user_id>[^/.]+)/toggle')
+    def toggle_active(self, request, user_id=None):
+        """POST /api/admin/users/{id}/toggle/ — 切换用户启用/禁用"""
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'error': '用户不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        user.is_active = not user.is_active
+        user.save()
+
+        return Response({
+            'id': str(user.id),
+            'username': user.username,
+            'is_active': user.is_active,
+        })
+
+    @action(detail=False, methods=['post'], url_path=r'(?P<user_id>[^/.]+)/reset-password')
+    def reset_password(self, request, user_id=None):
+        """POST /api/admin/users/{id}/reset-password/ — 重置用户密码"""
+        import secrets
+        import string
+
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'error': '用户不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        alphabet = string.ascii_letters + string.digits
+        new_password = ''.join(secrets.choice(alphabet) for _ in range(12))
+        user.set_password(new_password)
+        user.save()
+
+        return Response({
+            'id': str(user.id),
+            'username': user.username,
+            'new_password': new_password,
+        })
+
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        """GET /api/admin/stats/ — 系统统计"""
+        from django.contrib.auth import get_user_model
+        from datetime import datetime
+
+        User = get_user_model()
+        now = datetime.now()
+
+        try:
+            latest_estimate = Fund.objects.exclude(
+                estimate_time__isnull=True
+            ).latest('estimate_time')
+            latest_estimate_time = latest_estimate.estimate_time.isoformat()
+        except Fund.DoesNotExist:
+            latest_estimate_time = None
+
+        return Response({
+            'user_count': User.objects.count(),
+            'fund_count': Fund.objects.count(),
+            'position_count': Position.objects.count(),
+            'nav_history_count': FundNavHistory.objects.count(),
+            'latest_estimate_time': latest_estimate_time,
+            'version': '2.5.0',
+        })
+
+    @action(detail=False, methods=['post'], url_path=r'tasks/(?P<task_name>[^/.]+)')
+    def trigger_task(self, request, task_name=None):
+        """POST /api/admin/tasks/{task_name}/ — 手动触发 Celery 任务"""
+        TASK_WHITELIST = {
+            'update_fund_nav': 'api.tasks.update_fund_nav',
+            'update_fund_today_nav': 'api.tasks.update_fund_today_nav',
+            'recalculate_positions': None,  # 同步执行
+        }
+
+        if task_name not in TASK_WHITELIST:
+            return Response(
+                {'error': f'未知任务: {task_name}，可选: {", ".join(TASK_WHITELIST.keys())}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if task_name == 'recalculate_positions':
+            from .services import recalculate_all_positions
+            try:
+                recalculate_all_positions()
+                return Response({'status': 'completed', 'task_name': task_name})
+            except Exception as e:
+                logger.error(f'重算全部持仓失败: {e}')
+                return Response(
+                    {'error': f'重算失败: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        try:
+            from fundval.celery import app as celery_app
+            task_path = TASK_WHITELIST[task_name]
+            result = celery_app.send_task(task_path)
+            return Response({
+                'status': 'triggered',
+                'task_name': task_name,
+                'task_id': str(result.id),
+            })
+        except Exception as e:
+            logger.warning(f'Celery 任务触发失败: {task_name}, 错误: {e}')
+            return Response({
+                'status': 'error',
+                'task_name': task_name,
+                'error': 'Celery 服务不可用，任务未能触发',
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)

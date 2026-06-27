@@ -1,0 +1,256 @@
+.product-shell {
+  min-height: 100vh;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: stretch;
+  background:
+    radial-gradient(circle at top left, rgba(15, 111, 255, 0.08), transparent 28%),
+    linear-gradient(180deg, #f6f9fc 0%, #eef3f8 100%) !important;
+}
+
+.product-shell-sider {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  width: 248px;
+  min-width: 248px;
+  flex: 0 0 248px;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(12px);
+  border-right: 1px solid #d8e2ee;
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.65);
+}
+
+.product-shell-brand {
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid #d8e2ee;
+}
+
+.product-shell-brand-icon {
+  display: grid;
+  place-items: center;
+  color: #0f6fff;
+  font-size: 24px;
+}
+
+.product-shell-brand-title {
+  color: #122033;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.product-shell-brand-subtitle {
+  margin-top: 4px;
+  color: #62748a;
+  font-size: 11px;
+}
+
+.product-shell-menu {
+  flex: 1;
+  padding: 14px 12px 24px;
+}
+
+.product-shell-menu-group + .product-shell-menu-group {
+  margin-top: 10px;
+}
+
+.product-shell-menu-group-title {
+  padding: 12px 12px 8px;
+  color: #62748a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.product-shell-menu-item {
+  width: 100%;
+  height: 44px;
+  margin: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #122033;
+  cursor: pointer;
+  text-align: left;
+}
+
+.product-shell-menu-item .anticon {
+  font-size: 16px;
+}
+
+.product-shell-menu-item span:last-child {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.product-shell-menu-item:hover {
+  color: #0f6fff;
+  background: #e8f0ff;
+}
+
+.product-shell-menu-item.active {
+  color: #0f6fff;
+  background: linear-gradient(180deg, #f6f9ff 0%, #e9f1ff 100%);
+  box-shadow: inset 0 0 0 1px rgba(15, 111, 255, 0.15);
+}
+
+.product-shell-bottom {
+  padding: 0 12px 18px;
+}
+
+.product-shell-main.ant-layout {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent !important;
+}
+
+.product-shell-header.ant-layout-header {
+  height: auto;
+  line-height: normal;
+  padding: 22px 28px 18px;
+  background: transparent;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.product-shell-header-copy {
+  min-width: 0;
+}
+
+.product-shell-header-title {
+  color: #122033;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.product-shell-header-subtitle {
+  margin-top: 6px;
+  color: #62748a;
+  font-size: 13px;
+}
+
+.product-shell-header-actions {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.product-shell-workspace-switch {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid #d8e2ee;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.product-shell-workspace-switch button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #62748a;
+  cursor: pointer;
+}
+
+.product-shell-workspace-switch button:hover {
+  color: #0f6fff;
+  background: #e8f0ff;
+}
+
+.product-shell-workspace-switch button.active {
+  color: #ffffff;
+  background: #0f6fff;
+  box-shadow: 0 8px 18px rgba(15, 111, 255, 0.22);
+}
+
+.product-shell-header-meta {
+  flex-shrink: 0;
+  color: #62748a;
+  font-size: 12px;
+  padding: 10px 12px;
+  border: 1px solid #d8e2ee;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.product-shell-account {
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: #122033;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.product-shell-avatar {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: linear-gradient(145deg, #6fd3d2, #d3a63a);
+  color: #111827;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.product-shell-account-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  color: #122033;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.product-shell-account-copy small,
+.product-shell-chevron {
+  color: #62748a;
+}
+
+.product-shell-account-copy small {
+  font-size: 11px;
+}
+
+.product-shell-chevron {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.product-shell-content.ant-layout-content {
+  min-height: calc(100vh - 94px);
+  padding: 0 28px 28px;
+  background: transparent !important;
+}
+
+@media (max-width: 1180px) {
+  .product-shell-sider {
+    width: 220px;
+    min-width: 220px;
+    flex-basis: 220px;
+  }
+}

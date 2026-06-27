@@ -1,0 +1,13 @@
+# Python adapter 依赖
+# 拆出独立文件，方便 Dockerfile 缓存和本地 pip install 复用。
+#
+# 一组按"市场"分类：
+#   akshare/pandas         -> 中国 A 股 / ETF
+#   yfinance               -> 美股 / 港股 / 全球（NVDA/SOXX/TSM 等）
+#   requests               -> Frankfurter 汇率 HTTP 调用 + 通用 fallback
+# pykrx 暂未加入：体积大、对韩国市场专用，等真正需要 KRX 个股逐笔时再装。
+akshare
+mootdx>=0.11.7
+pandas
+yfinance>=0.2.40
+requests
