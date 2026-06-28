@@ -303,6 +303,45 @@ class FundPerformanceRankSnapshot(models.Model):
         ]
 
 
+class FundEvaluationSnapshot(models.Model):
+    """基金评估指标快照，由 Go 投研服务批量计算写入"""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    fund = models.ForeignKey(Fund, on_delete=models.CASCADE, related_name='evaluation_snapshots')
+    evaluation_date = models.DateField(db_index=True)
+    window_days = models.IntegerField(default=370, db_index=True)
+    nav_count = models.IntegerField(default=0)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    return_1m = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    return_3m = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    return_6m = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    return_1y = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    max_drawdown = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    volatility = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    sharpe = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    score = models.IntegerField(default=0)
+    level = models.CharField(max_length=32, default='谨慎')
+    reasons = models.JSONField(default=list, blank=True)
+    source = models.CharField(max_length=50, default='go_fund_research')
+    raw_data = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fund_evaluation_snapshot'
+        verbose_name = '基金评估指标快照'
+        verbose_name_plural = '基金评估指标快照'
+        unique_together = [['fund', 'evaluation_date', 'window_days', 'source']]
+        ordering = ['-evaluation_date', '-score']
+        indexes = [
+            models.Index(fields=['fund', '-evaluation_date'], name='api_fundeva_fund_id_7d4e12_idx'),
+            models.Index(fields=['evaluation_date', '-score'], name='api_fundeva_evaluat_3d71cd_idx'),
+            models.Index(fields=['level', '-evaluation_date'], name='api_fundeva_level_7a11bd_idx'),
+            models.Index(fields=['source', '-evaluation_date'], name='api_fundeva_source_c0b66d_idx'),
+        ]
+
+
 class Account(models.Model):
     """账户模型"""
 

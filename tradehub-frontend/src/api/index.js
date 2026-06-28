@@ -92,6 +92,7 @@ export const fundResearchAPI = {
   recommendTags: (codes) => api.get('/fund-research/v1/tags/recommend', { params: { codes: codes.join(',') }, timeout: 120000 }),
   syncStatus: () => api.get('/fund-research/v1/sync/status'),
   syncSectorMap: (items, seed = false) => api.post('/fund-research/v1/sync/sector-map', { items, seed }, { timeout: 120000 }),
+  syncEvaluations: (payload = {}) => api.post('/fund-research/v1/sync/evaluations', payload, { timeout: 180000 }),
 };
 
 // 股票 / ETF 监控

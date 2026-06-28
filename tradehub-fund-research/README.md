@@ -14,6 +14,7 @@ This service recreates the fund-focused workflows inspired by
 - related sector mapping and sector quote lookup
 - fund tag recommendation based on related sectors
 - sector metadata sync into PostgreSQL
+- fund evaluation metric calculation persisted into PostgreSQL
 
 The implementation is not a vendored copy of the upstream Go web app. It is a
 TradeHub-native Go service that calls EastMoney endpoints and reads the existing
@@ -38,6 +39,7 @@ Upstream attribution: see `THIRD_PARTY_NOTICES.md`.
 | `GET` | `/api/fund-research/v1/tags/recommend` | recommended fund tags |
 | `GET` | `/api/fund-research/v1/sync/status` | metadata sync status |
 | `POST` | `/api/fund-research/v1/sync/sector-map` | sync sector mappings into PostgreSQL |
+| `POST` | `/api/fund-research/v1/sync/evaluations` | calculate fund risk/evaluation metrics from PostgreSQL NAV data and upsert snapshots |
 
 ## Local Run
 
@@ -52,6 +54,19 @@ curl -X POST http://127.0.0.1:17081/api/fund-research/v1/funds/check \
   -H 'Content-Type: application/json' \
   -d '{"codes":["260104"]}'
 ```
+
+Calculate evaluation snapshots:
+
+```bash
+curl -X POST http://127.0.0.1:17081/api/fund-research/v1/sync/evaluations \
+  -H 'Content-Type: application/json' \
+  -d '{"limit":500,"window_days":370}'
+```
+
+The evaluation sync reads `fund`, `fund_nav_history`, and
+`fund_performance_rank_snapshot`, then upserts `fund_evaluation_snapshot`.
+Django ranking and compare APIs read those snapshots first and only fall back
+to Python request-time calculation when a snapshot is missing.
 
 ## Upstream Fund Workflow Coverage
 

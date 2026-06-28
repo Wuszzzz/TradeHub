@@ -17,6 +17,7 @@ router.register(r'fund-managers', viewsets.FundManagerViewSet, basename='fund-ma
 router.register(r'fund-manager-tenures', viewsets.FundManagerTenureViewSet, basename='fund-manager-tenure')
 router.register(r'fund-holding-snapshots', viewsets.FundHoldingSnapshotViewSet, basename='fund-holding-snapshot')
 router.register(r'fund-allocation-snapshots', viewsets.FundAllocationSnapshotViewSet, basename='fund-allocation-snapshot')
+router.register(r'fund-evaluation-snapshots', viewsets.FundEvaluationSnapshotViewSet, basename='fund-evaluation-snapshot')
 router.register(r'fund-performance-ranks', viewsets.FundPerformanceRankSnapshotViewSet, basename='fund-performance-rank')
 router.register(r'fund-sector-market-snapshots', viewsets.FundSectorMarketSnapshotViewSet, basename='fund-sector-market-snapshot')
 router.register(r'source-credentials', viewsets.SourceCredentialViewSet, basename='source-credential')

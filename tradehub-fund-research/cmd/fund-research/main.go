@@ -39,6 +39,7 @@ func main() {
 	mux.HandleFunc("GET /api/fund-research/v1/tags/recommend", s.RecommendTags)
 	mux.HandleFunc("GET /api/fund-research/v1/sync/status", s.SyncStatus)
 	mux.HandleFunc("POST /api/fund-research/v1/sync/sector-map", s.SyncSectorMap)
+	mux.HandleFunc("POST /api/fund-research/v1/sync/evaluations", s.SyncEvaluations)
 
 	log.Printf("fund-research listening on %s", addr)
 	if err := http.ListenAndServe(addr, loggingMiddleware(cors(mux))); err != nil {

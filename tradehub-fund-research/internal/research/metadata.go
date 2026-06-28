@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/lib/pq"
@@ -370,6 +371,10 @@ func dedupeTags(tags []FundTag) []FundTag {
 func stableID(value string) string {
 	replacer := strings.NewReplacer(" ", "_", "(", "", ")", "", "（", "", "）", "", "/", "_", "&", "and")
 	return strings.ToLower(replacer.Replace(strings.TrimSpace(value)))
+}
+
+func intString(value int) string {
+	return strconv.Itoa(value)
 }
 
 func isUndefinedTable(err error) bool {

@@ -74,6 +74,24 @@ cp .env.example .env
 - [docs/技术架构/3. 数据库分层设计.md](./docs/技术架构/3.%20数据库分层设计.md)
 - [docs/技术架构/4. 股票API模块化拆包方案.md](./docs/技术架构/4.%20股票API模块化拆包方案.md)
 
+## 基金评估与选择架构
+
+`/dashboard/rankings` 是基金评估与选择的主入口。页面读取 PostgreSQL 中的排行、净值、板块和 Go 预计算评估快照，不再把投研工具和排行割裂成两个工作台。
+
+核心分工：
+
+- `tradehub-fund-research` 负责主体计算：读取 `fund`、`fund_nav_history`、`fund_performance_rank_snapshot`，批量计算 1m/3m/6m/1y 收益、最大回撤、年化波动率、夏普率、评估分和等级，并写入 `fund_evaluation_snapshot`。
+- `tradehub-fund` 负责数据入库、DRF 查询和权限边界：排行接口优先读取 `fund_evaluation_snapshot`，缺失时才用 Python 做请求期兜底。
+- `tradehub-frontend` 在评估排行页展示 Go 写回的风险指标、评估等级、板块、标签，并提供“同步Go评估”按钮触发批量计算。
+
+手动同步示例：
+
+```bash
+curl -X POST http://127.0.0.1:17081/api/fund-research/v1/sync/evaluations \
+  -H 'Content-Type: application/json' \
+  -d '{"limit":500,"window_days":370}'
+```
+
 ## 目录结构
 
 ```text
@@ -101,6 +119,7 @@ TradeHub/
 - 股票和基金可以共享基础设施、认证、通知、AI 配置、任务审计，但业务模型保持边界清晰。
 - 页面新增前必须先定义 API、数据表、任务流和错误响应。
 - 基金投研主体能力优先落在 Go 服务 `tradehub-fund-research`，Python 基金后端继续负责账户、持仓、权限、通知和既有基金数据入库。
+- 基金评估指标计算优先由 Go 批量写入 `fund_evaluation_snapshot`，Django 排行/对比接口只读快照并保留兜底，不在页面请求期承担主计算。
 - 基金板块/标签能力吸收 `real-time-fund` 的工程链路：基金关联板块、板块 secid、批量行情、推荐标签、同步状态；实现仍落在 TradeHub Go 服务和 PostgreSQL 边界内。
 - market-api 是行情源聚合网关，不承载用户自选、策略、回测、交易等业务逻辑。
 - stock-api 是股票业务入口，后续承载自选、行情聚合、指标、形态、策略、回测、模拟交易、AI 研究等模块。

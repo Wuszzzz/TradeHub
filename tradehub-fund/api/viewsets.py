@@ -19,7 +19,7 @@ from .models import (
     Fund, Account, Position, PositionOperation,
     Watchlist, WatchlistItem, EstimateAccuracy, FundNavHistory,
     FundAllocationSnapshot, FundCompany, FundDailyFact, FundHoldingSnapshot,
-    FundManager, FundManagerTenure, FundPerformanceRankSnapshot,
+    FundManager, FundManagerTenure, FundEvaluationSnapshot, FundPerformanceRankSnapshot,
     FundSectorMarketSnapshot,
     AIConfig, AIPromptTemplate,
     NotificationChannel, NotificationRule, NotificationLog,
@@ -30,7 +30,7 @@ from .serializers import (
     FundNavHistorySerializer, QueryNavSerializer,
     FundAllocationSnapshotSerializer, FundCompanySerializer, FundDailyFactSerializer,
     FundHoldingSnapshotSerializer, FundManagerSerializer, FundManagerTenureSerializer,
-    FundPerformanceRankSnapshotSerializer, FundSectorMarketSnapshotSerializer,
+    FundEvaluationSnapshotSerializer, FundPerformanceRankSnapshotSerializer, FundSectorMarketSnapshotSerializer,
     AIConfigSerializer, AIPromptTemplateSerializer,
     NotificationChannelSerializer, NotificationRuleSerializer, NotificationLogSerializer,
 )
@@ -432,8 +432,9 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'], url_path='rankings')
     def rankings(self, request):
         """GET /api/funds/rankings/?type=gain&category=股票型 — 排行榜"""
-        from django.db.models import Count, Avg
+        from django.db.models import Avg
         from django.core.paginator import Paginator
+        from .services.fund_metrics import metrics_for_funds, evaluate_fund_choice
 
         rank_type = request.query_params.get('type', 'gain')
         category = request.query_params.get('category', '')
@@ -458,6 +459,8 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
                     snapshot_qs = snapshot_qs.filter(rank_date=latest_date)
             snapshot_qs = apply_fund_ranking_filters(snapshot_qs, category, min_size, max_size, industry, prefix='fund__')
             snapshot_qs = snapshot_qs.order_by('-rank_date', 'rank')
+            objects = list(snapshot_qs[:page_size])
+            metrics = metrics_for_funds([item.fund_id for item in objects])
             return Response({
                 'count': snapshot_qs.count(),
                 'results': [
@@ -474,8 +477,15 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
                         'position_count': item.raw_data.get('position_count'),
                         'watchlist_count': item.raw_data.get('watchlist_count'),
                         'source': item.source,
+                        **(metrics.get(item.fund_id) or {}),
+                        'evaluation': (metrics.get(item.fund_id) or {}).get('evaluation') or evaluate_fund_choice({
+                            'growth': str(item.growth) if item.growth is not None else None,
+                            'rank': item.rank,
+                            'total': item.total,
+                            **(metrics.get(item.fund_id) or {}),
+                        }),
                     }
-                    for item in snapshot_qs[:page_size]
+                    for item in objects
                 ],
             })
         elif rank_type == 'accuracy':
@@ -492,7 +502,10 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
         page_obj = paginator.get_page(page)
 
         results = []
-        for f in page_obj:
+        page_items = list(page_obj)
+        metrics = metrics_for_funds([fund.id for fund in page_items])
+        for index, f in enumerate(page_items, start=1):
+            metric = metrics.get(f.id) or {}
             item = {
                 'fund_code': f.fund_code, 'fund_name': f.fund_name,
                 'fund_type': f.fund_type,
@@ -500,11 +513,19 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
                 'fund_size_text': f.fund_size_text,
                 'latest_nav': str(f.latest_nav) if f.latest_nav else None,
                 'estimate_growth': str(f.estimate_growth) if f.estimate_growth else None,
+                'rank': index,
+                **metric,
             }
             if rank_type == 'popular':
                 item['pos_count'] = getattr(f, 'pos_count', 0)
             if rank_type == 'accuracy':
                 item['avg_error'] = str(round(getattr(f, 'avg_error', 0) or 0, 4))
+            item['evaluation'] = metric.get('evaluation') or evaluate_fund_choice({
+                'growth': item.get('estimate_growth'),
+                'rank': item.get('rank'),
+                'total': paginator.count,
+                **metric,
+            })
             results.append(item)
 
         return Response({'count': paginator.count, 'results': results})
@@ -512,9 +533,8 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'], url_path='compare')
     def compare(self, request):
         """GET /api/funds/compare/?codes=000001,161725 — 多基金对比"""
-        from datetime import date, timedelta
-        from decimal import Decimal
-        from django.db.models import Min, Max
+        from datetime import date
+        from .services.fund_metrics import calculate_nav_returns, calculate_nav_risk_metrics, metrics_for_funds
 
         codes_str = request.query_params.get('codes', '')
         codes = [c.strip() for c in codes_str.split(',') if c.strip()]
@@ -526,71 +546,31 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
 
         funds = Fund.objects.filter(fund_code__in=codes)
         fund_map = {f.fund_code: f for f in funds}
+        snapshot_metrics = metrics_for_funds([fund.id for fund in funds])
 
         today = date.today()
         periods = {'1m': 30, '3m': 90, '6m': 180, '1y': 365}
-
-        def calc_returns(nav_list):
-            result = {}
-            for period_name, days in periods.items():
-                cutoff = today - timedelta(days=days)
-                start_nav = None
-                for n in nav_list:
-                    if n.nav_date <= cutoff:
-                        start_nav = n
-                end_nav = nav_list[-1] if nav_list else None
-                if start_nav and end_nav and start_nav.unit_nav > 0:
-                    result[period_name] = str(round((end_nav.unit_nav - start_nav.unit_nav) / start_nav.unit_nav * 100, 2))
-                else:
-                    result[period_name] = None
-            return result
-
-        def calc_metrics(nav_list):
-            if len(nav_list) < 60:
-                return {'max_drawdown': None, 'volatility': None, 'sharpe': None}
-
-            vals = [float(n.unit_nav) for n in nav_list]
-            # 最大回撤
-            peak = vals[0]
-            max_dd = 0.0
-            for v in vals:
-                if v > peak:
-                    peak = v
-                dd = (peak - v) / peak if peak > 0 else 0
-                if dd > max_dd:
-                    max_dd = dd
-
-            # 波动率（年化标准差，按 252 个交易日）
-            daily_returns = [(vals[i] - vals[i-1]) / vals[i-1] for i in range(1, len(vals))]
-            if len(daily_returns) < 2:
-                return {'max_drawdown': str(round(-max_dd * 100, 2)), 'volatility': None, 'sharpe': None}
-
-            mean = sum(daily_returns) / len(daily_returns)
-            variance = sum((r - mean) ** 2 for r in daily_returns) / (len(daily_returns) - 1)
-            annual_vol = (variance ** 0.5) * (252 ** 0.5)
-
-            # 夏普比率 (无风险利率 2%)
-            avg_daily = mean
-            annual_return = avg_daily * 252
-            sharpe = (annual_return - 0.02) / annual_vol if annual_vol > 0 else None
-
-            return {
-                'max_drawdown': str(round(-max_dd * 100, 2)),
-                'volatility': str(round(annual_vol * 100, 2)),
-                'sharpe': str(round(sharpe, 2)) if sharpe is not None else None,
-            }
 
         result = []
         for code in codes:
             fund = fund_map.get(code)
             if not fund:
                 continue
-            nav_list = list(FundNavHistory.objects.filter(
-                fund=fund, nav_date__lte=today
-            ).order_by('nav_date'))
-
-            returns = calc_returns(nav_list) if nav_list else {k: None for k in periods}
-            metrics = calc_metrics(nav_list) if nav_list else {'max_drawdown': None, 'volatility': None, 'sharpe': None}
+            cached = snapshot_metrics.get(fund.id) or {}
+            returns = cached.get('returns')
+            metrics = {
+                'max_drawdown': cached.get('max_drawdown'),
+                'volatility': cached.get('volatility'),
+                'sharpe': cached.get('sharpe'),
+            }
+            if not returns or not any(value is not None for value in metrics.values()):
+                nav_list = list(FundNavHistory.objects.filter(
+                    fund=fund, nav_date__lte=today
+                ).order_by('nav_date'))
+                if not returns:
+                    returns = calculate_nav_returns(nav_list, today=today) if nav_list else {k: None for k in periods}
+                if not any(value is not None for value in metrics.values()):
+                    metrics = calculate_nav_risk_metrics(nav_list) if nav_list else {'max_drawdown': None, 'volatility': None, 'sharpe': None}
 
             result.append({
                 'fund_code': fund.fund_code,
@@ -2001,6 +1981,49 @@ class FundPerformanceRankSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
                 queryset = queryset.filter(rank_date=latest_date)
         queryset = apply_fund_ranking_filters(queryset, fund_type, min_size, max_size, industry, prefix='fund__')
         return queryset.order_by('-rank_date', 'period', 'rank')
+
+    def list(self, request, *args, **kwargs):
+        from .services.fund_metrics import metrics_for_funds
+
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        objects = list(page) if page is not None else list(queryset)
+        metrics = metrics_for_funds([obj.fund_id for obj in objects])
+        serializer = self.get_serializer(objects, many=True, context={**self.get_serializer_context(), 'fund_metrics': metrics})
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
+
+class FundEvaluationSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
+    """基金评估指标快照，由 Go 投研服务计算写入"""
+
+    serializer_class = FundEvaluationSnapshotSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        queryset = FundEvaluationSnapshot.objects.select_related('fund')
+        fund_code = self.request.query_params.get('fund_code')
+        fund_type = self.request.query_params.get('fund_type') or self.request.query_params.get('category')
+        level = self.request.query_params.get('level')
+        evaluation_date = self.request.query_params.get('evaluation_date')
+        latest = self.request.query_params.get('latest', '1')
+        min_size = self.request.query_params.get('min_size')
+        max_size = self.request.query_params.get('max_size')
+        industry = self.request.query_params.get('industry')
+
+        if fund_code:
+            queryset = queryset.filter(fund__fund_code=fund_code)
+        if level:
+            queryset = queryset.filter(level=level)
+        if evaluation_date:
+            queryset = queryset.filter(evaluation_date=evaluation_date)
+        elif latest not in ('0', 'false', 'False'):
+            latest_date = queryset.order_by('-evaluation_date').values_list('evaluation_date', flat=True).first()
+            if latest_date:
+                queryset = queryset.filter(evaluation_date=latest_date)
+        queryset = apply_fund_ranking_filters(queryset, fund_type, min_size, max_size, industry, prefix='fund__')
+        return queryset.order_by('-evaluation_date', '-score', 'fund__fund_code')
 
 
 class FundSectorMarketSnapshotViewSet(viewsets.ReadOnlyModelViewSet):

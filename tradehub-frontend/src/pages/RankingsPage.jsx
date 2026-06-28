@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
-import { Button, Card, DatePicker, Drawer, Tabs, Table, Select, Spin, Empty, Tag, Space, Input, Typography, message } from 'antd';
-import { AimOutlined, FireOutlined, FundOutlined, PlusOutlined, StarOutlined, TrophyOutlined } from '@ant-design/icons';
-import { fundsAPI, watchlistsAPI } from '../api';
+import { Alert, Button, Card, Col, DatePicker, Drawer, Row, Statistic, Tabs, Table, Select, Spin, Empty, Tag, Space, Input, Typography, message } from 'antd';
+import { AimOutlined, FireOutlined, FundOutlined, PlusOutlined, StarOutlined, SyncOutlined, TrophyOutlined } from '@ant-design/icons';
+import { fundResearchAPI, fundsAPI, watchlistsAPI } from '../api';
 
 const { Text } = Typography;
 const STORAGE_KEY = 'tradehub.rankings.filters.v2';
@@ -39,6 +39,16 @@ const SIZE_RANGES = [
   { value: '100-999999', label: '100亿以上' },
 ];
 
+const pct = (value) => value === null || value === undefined || value === '' ? '-' : `${Number(value).toFixed(2)}%`;
+const signedPct = (value) => value === null || value === undefined || value === '' ? '-' : `${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(2)}%`;
+const metricColor = (value, reverse = false) => {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num === 0) return undefined;
+  const good = reverse ? num < 0 : num > 0;
+  return good ? '#3f8600' : '#cf1322';
+};
+const evaluationColor = (level) => ({ 优选: 'green', 观察: 'gold', 谨慎: 'red' }[level] || 'default');
+
 const RankingsPage = () => {
   const navigate = useNavigate();
   const cachedFilters = (() => {
@@ -56,6 +66,7 @@ const RankingsPage = () => {
   const [industry, setIndustry] = useState(cachedFilters.industry || '');
   const [data, setData] = useState([]);
   const [sectorMap, setSectorMap] = useState({});
+  const [researchMap, setResearchMap] = useState({});
   const [meta, setMeta] = useState({});
   const [watchlists, setWatchlists] = useState([]);
   const [selectedWatchlistId, setSelectedWatchlistId] = useState(cachedFilters.watchlistId || '');
@@ -64,10 +75,12 @@ const RankingsPage = () => {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisData, setAnalysisData] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [syncLoading, setSyncLoading] = useState(false);
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const requestIdRef = useRef(0);
   const isStoredRanking = type === 'performance' || type === 'gain' || type === 'popular';
   const displayData = isStoredRanking ? data.filter((item) => !item.period || item.period === period) : data;
+  const enrichedData = displayData.map((item) => ({ ...item, research: researchMap[item.fund_code] || {} }));
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -95,6 +108,7 @@ const RankingsPage = () => {
   const loadData = async () => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
+    setResearchMap({});
     try {
       if (isStoredRanking) {
         const [minSize, maxSize] = sizeRange ? sizeRange.split('-') : [];
@@ -128,6 +142,7 @@ const RankingsPage = () => {
           period: rows[0]?.period || period,
           source: rows[0]?.source || '',
         });
+        enrichResearch(rows, requestId);
         return;
       }
       const [minSize, maxSize] = sizeRange ? sizeRange.split('-') : [];
@@ -154,12 +169,42 @@ const RankingsPage = () => {
       setSectorMap(nextMap);
       setData(res.results || []);
       setMeta({});
+      enrichResearch(res.results || [], requestId);
     } catch {
       if (requestId !== requestIdRef.current) return;
       setData([]);
     } finally {
       if (requestId === requestIdRef.current) {
         setLoading(false);
+      }
+    }
+  };
+
+  const enrichResearch = async (rows, requestId) => {
+    const codes = rows.slice(0, 80).map((item) => item.fund_code).filter(Boolean);
+    if (!codes.length) {
+      setResearchMap({});
+      return;
+    }
+    try {
+      const [sectorRes, tagRes] = await Promise.all([
+        fundResearchAPI.relatedSectors(codes, true),
+        fundResearchAPI.recommendTags(codes),
+      ]);
+      if (requestId !== requestIdRef.current) return;
+      const nextMap = {};
+      (sectorRes.data?.data?.items || []).forEach((item) => {
+        nextMap[item.fund_code] = { ...(nextMap[item.fund_code] || {}), relatedSector: item };
+      });
+      (tagRes.data?.data?.items || []).forEach((item) => {
+        if (!nextMap[item.fund_code]) nextMap[item.fund_code] = {};
+        if (!nextMap[item.fund_code].tags) nextMap[item.fund_code].tags = [];
+        nextMap[item.fund_code].tags.push(item);
+      });
+      setResearchMap(nextMap);
+    } catch {
+      if (requestId === requestIdRef.current) {
+        setResearchMap({});
       }
     }
   };
@@ -214,6 +259,24 @@ const RankingsPage = () => {
     }
   };
 
+  const syncGoEvaluations = async () => {
+    setSyncLoading(true);
+    try {
+      const codes = displayData.slice(0, 120).map((item) => item.fund_code).filter(Boolean);
+      const { data: res } = await fundResearchAPI.syncEvaluations({
+        codes,
+        limit: codes.length || 500,
+        window_days: 370,
+      });
+      message.success(`Go 评估计算完成：${res.data?.synced || 0} 只基金`);
+      await loadData();
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || 'Go 评估同步失败');
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
   const columns = [
     { title: '排名', key: 'rank_index', width: 70, render: (_, record, i) => record.rank || i + 1 },
     {
@@ -256,11 +319,59 @@ const RankingsPage = () => {
       width: 260,
       render: (_, record) => {
         const sectors = sectorMap[record.fund_code] || [];
+        const related = record.research?.relatedSector;
+        const tags = record.research?.tags || [];
         return sectors.length > 0 ? (
           <Space wrap size={[4, 4]}>
+            {related?.sector && (
+              <Tag color="geekblue">
+                {related.sector}
+                {related.quote?.change_pct !== undefined ? ` ${signedPct(related.quote.change_pct)}` : ''}
+              </Tag>
+            )}
             {sectors.map((item) => <Tag key={item.name}>{item.name} {Number(item.ratio).toFixed(1)}%</Tag>)}
+            {tags.slice(0, 2).map((item) => <Tag key={item.id} color={item.theme === 'sector' ? 'blue' : 'purple'}>{item.name}</Tag>)}
+          </Space>
+        ) : related?.sector ? (
+          <Space wrap size={[4, 4]}>
+            <Tag color="geekblue">{related.sector}{related.quote?.change_pct !== undefined ? ` ${signedPct(related.quote.change_pct)}` : ''}</Tag>
+            {tags.slice(0, 2).map((item) => <Tag key={item.id} color={item.theme === 'sector' ? 'blue' : 'purple'}>{item.name}</Tag>)}
           </Space>
         ) : '-';
+      },
+    },
+    {
+      title: '回撤',
+      dataIndex: 'max_drawdown',
+      key: 'max_drawdown',
+      width: 90,
+      render: v => <span style={{ color: metricColor(v, true) }}>{pct(v)}</span>,
+      sorter: (a, b) => Math.abs(Number(a.max_drawdown || 0)) - Math.abs(Number(b.max_drawdown || 0)),
+    },
+    {
+      title: '波动',
+      dataIndex: 'volatility',
+      key: 'volatility',
+      width: 90,
+      render: v => pct(v),
+      responsive: ['lg'],
+      sorter: (a, b) => Number(a.volatility || 0) - Number(b.volatility || 0),
+    },
+    {
+      title: '夏普',
+      dataIndex: 'sharpe',
+      key: 'sharpe',
+      width: 90,
+      render: v => <span style={{ color: metricColor(v) }}>{v ?? '-'}</span>,
+      sorter: (a, b) => Number(a.sharpe || -999) - Number(b.sharpe || -999),
+    },
+    {
+      title: '评估',
+      key: 'evaluation',
+      width: 120,
+      render: (_, record) => {
+        const level = record.evaluation?.level;
+        return level ? <Tag color={evaluationColor(level)}>{level} {record.evaluation?.score || 0}</Tag> : '-';
       },
     },
     ...(isStoredRanking ? [
@@ -302,7 +413,7 @@ const RankingsPage = () => {
   ];
 
   return (
-    <Card title="排行榜" extra={
+    <Card title="基金评估与选择" extra={
       <Space wrap>
         {isStoredRanking && (
           <Select
@@ -347,18 +458,25 @@ const RankingsPage = () => {
           onChange={setSelectedWatchlistId}
           options={watchlists.map(item => ({ value: item.id, label: item.name }))}
         />
+        <Button icon={<SyncOutlined />} loading={syncLoading} onClick={syncGoEvaluations}>同步Go评估</Button>
         <Button icon={<FundOutlined />} onClick={loadSectorAnalysis}>高级分析</Button>
       </Space>
     }>
       {isStoredRanking && (
-        <div style={{ marginBottom: 12 }}>
-          <Text type="secondary">
-            当前周期: {PERIODS.find(item => item.value === period)?.label || period}
-            {' / '}排行日: {meta.rankDate || rankDate || '最新落库'}
-            {' / '}首行数据周期: {displayData[0]?.period || data[0]?.period || '-'}
-          </Text>
-        </div>
+        <Alert
+          showIcon
+          type="info"
+          style={{ marginBottom: 12 }}
+          message="排行已合并基金评估与选择"
+          description={`数据优先来自 PostgreSQL 落库排行和净值历史，回撤/波动/夏普/评估分由 Go 投研服务批量计算写回数据库；板块和标签也由 Go 投研服务增强。当前周期：${PERIODS.find(item => item.value === period)?.label || period} / 排行日：${meta.rankDate || rankDate || '最新落库'} / 首行周期：${displayData[0]?.period || data[0]?.period || '-'}`}
+        />
       )}
+      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+        <Col xs={12} md={6}><Card size="small"><Statistic title="候选基金" value={enrichedData.length} /></Card></Col>
+        <Col xs={12} md={6}><Card size="small"><Statistic title="优选" value={enrichedData.filter(item => item.evaluation?.level === '优选').length} /></Card></Col>
+        <Col xs={12} md={6}><Card size="small"><Statistic title="有夏普率" value={enrichedData.filter(item => item.sharpe !== null && item.sharpe !== undefined).length} /></Card></Col>
+        <Col xs={12} md={6}><Card size="small"><Statistic title="已匹配板块" value={enrichedData.filter(item => item.research?.relatedSector?.sector).length} /></Card></Col>
+      </Row>
       <Tabs activeKey={type} onChange={setType}
         items={[
           { key: 'performance', label: <span><TrophyOutlined />落库排行</span> },
@@ -368,10 +486,10 @@ const RankingsPage = () => {
         ]}
       />
       <Spin spinning={loading}>
-        {displayData.length > 0 ? (
+        {enrichedData.length > 0 ? (
           <Table
             key={`${type}-${period}-${category}-${sizeRange}-${industry}`}
-            dataSource={displayData}
+            dataSource={enrichedData}
             columns={columns}
             rowKey="fund_code"
             pagination={false}
@@ -401,12 +519,40 @@ const RankingsPage = () => {
             <Text>排行日：{detailRecord.rank_date || '-'}</Text>
             <Text>周期：{PERIODS.find(item => item.value === detailRecord.period)?.label || detailRecord.period || '-'}</Text>
             <Text>涨幅：{detailRecord.growth != null ? `${Number(detailRecord.growth).toFixed(2)}%` : '-'}</Text>
+            <Row gutter={[8, 8]}>
+              <Col span={8}><Card size="small"><Statistic title="最大回撤" value={detailRecord.max_drawdown ?? '-'} suffix={detailRecord.max_drawdown ? '%' : ''} /></Card></Col>
+              <Col span={8}><Card size="small"><Statistic title="波动率" value={detailRecord.volatility ?? '-'} suffix={detailRecord.volatility ? '%' : ''} /></Card></Col>
+              <Col span={8}><Card size="small"><Statistic title="夏普" value={detailRecord.sharpe ?? '-'} /></Card></Col>
+            </Row>
+            {detailRecord.evaluation?.level && (
+              <Alert
+                showIcon
+                type={detailRecord.evaluation.level === '优选' ? 'success' : detailRecord.evaluation.level === '观察' ? 'warning' : 'error'}
+                message={`评估结论：${detailRecord.evaluation.level}（${detailRecord.evaluation.score || 0}分）`}
+                description={(detailRecord.evaluation.reasons || []).join('、') || '暂无充分评估理由'}
+              />
+            )}
             <div>
               <Text type="secondary">所属板块</Text>
               <div style={{ marginTop: 8 }}>
-                {(sectorMap[detailRecord.fund_code] || []).length ? (
+                <Space wrap size={[4, 4]}>
+                  {detailRecord.research?.relatedSector?.sector && (
+                    <Tag color="geekblue">
+                      {detailRecord.research.relatedSector.sector}
+                      {detailRecord.research.relatedSector.quote?.change_pct !== undefined ? ` ${signedPct(detailRecord.research.relatedSector.quote.change_pct)}` : ''}
+                    </Tag>
+                  )}
+                  {(sectorMap[detailRecord.fund_code] || []).map(item => <Tag key={item.name}>{item.name} {Number(item.ratio).toFixed(1)}%</Tag>)}
+                  {!(detailRecord.research?.relatedSector?.sector || (sectorMap[detailRecord.fund_code] || []).length) && '-'}
+                </Space>
+              </div>
+            </div>
+            <div>
+              <Text type="secondary">推荐标签</Text>
+              <div style={{ marginTop: 8 }}>
+                {(detailRecord.research?.tags || []).length ? (
                   <Space wrap size={[4, 4]}>
-                    {sectorMap[detailRecord.fund_code].map(item => <Tag key={item.name}>{item.name} {Number(item.ratio).toFixed(1)}%</Tag>)}
+                    {detailRecord.research.tags.map(item => <Tag key={item.id} color={item.theme === 'sector' ? 'blue' : 'purple'}>{item.name}</Tag>)}
                   </Space>
                 ) : '-'}
               </div>

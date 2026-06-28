@@ -304,6 +304,39 @@ func (s *Server) SyncSectorMap(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: map[string]any{"synced": count}})
 }
 
+func (s *Server) SyncEvaluations(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Codes      []string `json:"codes"`
+		Code       string   `json:"code"`
+		Limit      int      `json:"limit"`
+		WindowDays int      `json:"window_days"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&payload)
+	codes := payload.Codes
+	if payload.Code != "" {
+		codes = append(codes, splitFields(payload.Code)...)
+	}
+	if raw := r.URL.Query().Get("codes"); raw != "" {
+		codes = append(codes, splitFields(raw)...)
+	}
+	if payload.Limit <= 0 {
+		payload.Limit = intQuery(r, "limit", 500)
+	}
+	if payload.WindowDays <= 0 {
+		payload.WindowDays = intQuery(r, "window_days", 370)
+	}
+	items, err := s.syncEvaluationSnapshots(r.Context(), payload.Limit, payload.WindowDays, codes)
+	if err != nil {
+		errorJSON(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: map[string]any{
+		"synced":      len(items),
+		"window_days": payload.WindowDays,
+		"items":       items,
+	}})
+}
+
 func filterParamsFromQuery(r *http.Request) FundFilterParams {
 	params := defaultStrictParams()
 	if raw := r.URL.Query().Get("types"); raw != "" {

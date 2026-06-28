@@ -10,8 +10,8 @@ from .models import (
     Fund, Account, Position, PositionOperation,
     Watchlist, WatchlistItem, EstimateAccuracy, FundNavHistory,
     FundAllocationSnapshot, FundCompany, FundDailyFact, FundHoldingItem,
-    FundHoldingSnapshot, FundManager, FundManagerTenure, FundPerformanceRankSnapshot,
-    FundSectorMarketSnapshot,
+    FundHoldingSnapshot, FundManager, FundManagerTenure, FundEvaluationSnapshot,
+    FundPerformanceRankSnapshot, FundSectorMarketSnapshot,
     UserSourceCredential, AIConfig, AIPromptTemplate,
     NotificationChannel, NotificationRule, NotificationLog,
 )
@@ -376,6 +376,10 @@ class FundPerformanceRankSnapshotSerializer(serializers.ModelSerializer):
     fund_type = serializers.CharField(source='fund.fund_type', read_only=True)
     fund_size = serializers.DecimalField(source='fund.fund_size', max_digits=20, decimal_places=4, read_only=True)
     fund_size_text = serializers.CharField(source='fund.fund_size_text', read_only=True)
+    max_drawdown = serializers.SerializerMethodField()
+    volatility = serializers.SerializerMethodField()
+    sharpe = serializers.SerializerMethodField()
+    evaluation = serializers.SerializerMethodField()
 
     class Meta:
         model = FundPerformanceRankSnapshot
@@ -383,6 +387,50 @@ class FundPerformanceRankSnapshotSerializer(serializers.ModelSerializer):
             'id', 'fund', 'fund_code', 'fund_name', 'fund_type', 'rank_type',
             'fund_size', 'fund_size_text', 'rank_date', 'period',
             'growth', 'rank', 'total', 'quartile', 'source',
+            'max_drawdown', 'volatility', 'sharpe', 'evaluation',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def _metrics(self, obj):
+        metrics_map = self.context.get('fund_metrics') or {}
+        return metrics_map.get(obj.fund_id) or {}
+
+    def get_max_drawdown(self, obj):
+        return self._metrics(obj).get('max_drawdown')
+
+    def get_volatility(self, obj):
+        return self._metrics(obj).get('volatility')
+
+    def get_sharpe(self, obj):
+        return self._metrics(obj).get('sharpe')
+
+    def get_evaluation(self, obj):
+        from .services.fund_metrics import evaluate_fund_choice
+        metrics = self._metrics(obj)
+        if metrics.get('evaluation'):
+            return metrics['evaluation']
+        return evaluate_fund_choice({
+            'growth': str(obj.growth) if obj.growth is not None else None,
+            'rank': obj.rank,
+            'total': obj.total,
+            **metrics,
+        })
+
+
+class FundEvaluationSnapshotSerializer(serializers.ModelSerializer):
+    fund_code = serializers.CharField(source='fund.fund_code', read_only=True)
+    fund_name = serializers.CharField(source='fund.fund_name', read_only=True)
+    fund_type = serializers.CharField(source='fund.fund_type', read_only=True)
+
+    class Meta:
+        model = FundEvaluationSnapshot
+        fields = [
+            'id', 'fund', 'fund_code', 'fund_name', 'fund_type',
+            'evaluation_date', 'window_days', 'nav_count', 'start_date', 'end_date',
+            'return_1m', 'return_3m', 'return_6m', 'return_1y',
+            'max_drawdown', 'volatility', 'sharpe',
+            'score', 'level', 'reasons', 'source', 'raw_data',
             'created_at', 'updated_at',
         ]
         read_only_fields = fields
