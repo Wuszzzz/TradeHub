@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	addr := getenv("FUND_RESEARCH_ADDR", ":18081")
+	addr := getenv("FUND_RESEARCH_ADDR", ":17081")
 	db, err := openDB()
 	if err != nil {
 		log.Printf("fund-research db unavailable: %v", err)

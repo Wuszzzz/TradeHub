@@ -82,6 +82,34 @@ const RankingsPage = () => {
   const displayData = isStoredRanking ? data.filter((item) => !item.period || item.period === period) : data;
   const enrichedData = displayData.map((item) => ({ ...item, research: researchMap[item.fund_code] || {} }));
 
+  const loadSectorsForRows = async (rows, requestId) => {
+    const codes = rows.slice(0, 100).map((item) => item.fund_code).filter(Boolean);
+    if (!codes.length) {
+      setSectorMap({});
+      return;
+    }
+    try {
+      const { data: sectorRes } = await fundsAPI.allocationSnapshots({
+        allocation_type: 'industry',
+        fund_codes: codes.join(','),
+      });
+      if (requestId !== requestIdRef.current) return;
+      const sectors = sectorRes.results || sectorRes || [];
+      const nextMap = {};
+      sectors.forEach((item) => {
+        if (!nextMap[item.fund_code]) nextMap[item.fund_code] = [];
+        if (nextMap[item.fund_code].length < 3) {
+          nextMap[item.fund_code].push(item);
+        }
+      });
+      setSectorMap(nextMap);
+    } catch {
+      if (requestId === requestIdRef.current) {
+        setSectorMap({});
+      }
+    }
+  };
+
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       type,
@@ -109,67 +137,47 @@ const RankingsPage = () => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setResearchMap({});
+    setSectorMap({});
     try {
       if (isStoredRanking) {
         const [minSize, maxSize] = sizeRange ? sizeRange.split('-') : [];
-        const [{ data: res }, { data: sectorRes }] = await Promise.all([
-          fundsAPI.performanceRanks({
-            rank_type: type === 'popular' ? 'popular' : 'performance',
-            period,
-            rank_date: period === 'day' && rankDate ? rankDate : undefined,
-            category,
-            min_size: minSize || undefined,
-            max_size: maxSize || undefined,
-            industry: industry || undefined,
-            page_size: 100,
-          }),
-          fundsAPI.allocationSnapshots({ allocation_type: 'industry', page_size: 500 }),
-        ]);
-        const rows = res.results || res || [];
-        const sectors = sectorRes.results || sectorRes || [];
-        const nextMap = {};
-        sectors.forEach((item) => {
-          if (!nextMap[item.fund_code]) nextMap[item.fund_code] = [];
-          if (nextMap[item.fund_code].length < 3) {
-            nextMap[item.fund_code].push(item);
-          }
+        const { data: res } = await fundsAPI.performanceRanks({
+          rank_type: type === 'popular' ? 'popular' : 'performance',
+          period,
+          rank_date: period === 'day' && rankDate ? rankDate : undefined,
+          category,
+          min_size: minSize || undefined,
+          max_size: maxSize || undefined,
+          industry: industry || undefined,
+          page_size: 100,
         });
+        const rows = res.results || res || [];
         if (requestId !== requestIdRef.current) return;
-        setSectorMap(nextMap);
         setData(rows);
         setMeta({
           rankDate: rows[0]?.rank_date || '',
           period: rows[0]?.period || period,
           source: rows[0]?.source || '',
         });
+        loadSectorsForRows(rows, requestId);
         enrichResearch(rows, requestId);
         return;
       }
       const [minSize, maxSize] = sizeRange ? sizeRange.split('-') : [];
-      const [{ data: res }, { data: sectorRes }] = await Promise.all([
-        fundsAPI.rankings({
-          type,
-          category,
-          min_size: minSize || undefined,
-          max_size: maxSize || undefined,
-          industry: industry || undefined,
-          page: 1,
-        }),
-        fundsAPI.allocationSnapshots({ allocation_type: 'industry', page_size: 500 }),
-      ]);
-      const sectors = sectorRes.results || sectorRes || [];
-      const nextMap = {};
-      sectors.forEach((item) => {
-        if (!nextMap[item.fund_code]) nextMap[item.fund_code] = [];
-        if (nextMap[item.fund_code].length < 3) {
-          nextMap[item.fund_code].push(item);
-        }
+      const { data: res } = await fundsAPI.rankings({
+        type,
+        category,
+        min_size: minSize || undefined,
+        max_size: maxSize || undefined,
+        industry: industry || undefined,
+        page: 1,
       });
+      const rows = res.results || [];
       if (requestId !== requestIdRef.current) return;
-      setSectorMap(nextMap);
-      setData(res.results || []);
+      setData(rows);
       setMeta({});
-      enrichResearch(res.results || [], requestId);
+      loadSectorsForRows(rows, requestId);
+      enrichResearch(rows, requestId);
     } catch {
       if (requestId !== requestIdRef.current) return;
       setData([]);

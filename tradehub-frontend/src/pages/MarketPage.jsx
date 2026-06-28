@@ -134,7 +134,7 @@ const MarketPage = () => {
         });
         const rows = data.results || data || [];
         setRankings(rows);
-        setTotal(rows.length);
+        setTotal(data.count || rows.length);
       } else {
         const { data } = await fundsAPI.rankings({ type: nextType, category: nextCategory, page: nextPage });
         setRankings(data.results || []);

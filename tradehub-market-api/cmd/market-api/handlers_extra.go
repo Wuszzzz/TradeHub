@@ -141,6 +141,105 @@ func (s *server) eastmoneyFlowDaily(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *server) eastmoneyIndustryRank(w http.ResponseWriter, r *http.Request) {
+	top := intQuery(r, "limit", 100)
+	ttl := 2 * time.Minute
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.eastmoney.IndustryRank(r.Context(), top)
+	})
+}
+
+func (s *server) eastmoneyConceptBlocks(w http.ResponseWriter, r *http.Request) {
+	spec, ok := s.resolveSpec(w, r)
+	if !ok {
+		return
+	}
+	ttl := 30 * time.Minute
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.eastmoney.ConceptBlocks(r.Context(), spec)
+	})
+}
+
+func (s *server) eastmoneyDataCenter(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	kind := strings.TrimSpace(q.Get("kind"))
+	code := strings.TrimSpace(q.Get("code"))
+	if code == "" {
+		code = strings.TrimSpace(q.Get("symbol"))
+	}
+	pageSize := intQuery(r, "page_size", 30)
+	ttl := 30 * time.Minute
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.eastmoney.DataCenter(r.Context(), kind, code, pageSize)
+	})
+}
+
+func (s *server) eastmoneyReports(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	code := strings.TrimSpace(q.Get("code"))
+	qType := strings.TrimSpace(q.Get("q_type"))
+	if qType == "" {
+		qType = strings.TrimSpace(q.Get("qType"))
+	}
+	industryCode := strings.TrimSpace(q.Get("industry_code"))
+	page := intQuery(r, "page", 1)
+	pageSize := intQuery(r, "page_size", 20)
+	ttl := 30 * time.Minute
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.eastmoney.Reports(r.Context(), code, qType, industryCode, page, pageSize)
+	})
+}
+
+func (s *server) eastmoneyStockNews(w http.ResponseWriter, r *http.Request) {
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	if code == "" {
+		if spec, ok := s.resolveSpec(w, r); ok {
+			code = spec.Code
+		} else {
+			return
+		}
+	}
+	pageSize := intQuery(r, "page_size", 20)
+	ttl := 10 * time.Minute
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.eastmoney.StockNews(r.Context(), code, pageSize)
+	})
+}
+
+func (s *server) eastmoneyGlobalNews(w http.ResponseWriter, r *http.Request) {
+	pageSize := intQuery(r, "page_size", 50)
+	ttl := 1 * time.Minute
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.eastmoney.GlobalNews(r.Context(), pageSize)
+	})
+}
+
+func (s *server) eastmoneyLimitPool(w http.ResponseWriter, r *http.Request) {
+	pool := strings.TrimSpace(r.URL.Query().Get("pool"))
+	date := strings.TrimSpace(r.URL.Query().Get("date"))
+	ttl := 30 * time.Second
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.eastmoney.LimitPool(r.Context(), pool, date)
+	})
+}
+
+func (s *server) cninfoAnnouncements(w http.ResponseWriter, r *http.Request) {
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	if code == "" {
+		if spec, ok := s.resolveSpec(w, r); ok {
+			code = spec.Code
+		} else {
+			return
+		}
+	}
+	page := intQuery(r, "page", 1)
+	pageSize := intQuery(r, "page_size", 30)
+	ttl := 30 * time.Minute
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.cninfo.Announcements(r.Context(), code, page, pageSize)
+	})
+}
+
 func eastmoneyKlineTTL(period string) time.Duration {
 	switch period {
 	case "1m", "5m", "15m", "30m", "60m":
@@ -331,6 +430,115 @@ func (s *server) thsKline(w http.ResponseWriter, r *http.Request) {
 	s.serveWithCache(w, r, ttl, func() (any, error) {
 		return s.ths.Kline(r.Context(), spec, period, adjust, limit)
 	})
+}
+
+func (s *server) thsHotReason(w http.ResponseWriter, r *http.Request) {
+	date := strings.TrimSpace(r.URL.Query().Get("date"))
+	ttl := 5 * time.Minute
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.ths.HotReason(r.Context(), date)
+	})
+}
+
+func (s *server) thsNorthbound(w http.ResponseWriter, r *http.Request) {
+	ttl := 30 * time.Second
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.ths.Northbound(r.Context())
+	})
+}
+
+func (s *server) thsHotList(w http.ResponseWriter, r *http.Request) {
+	period := strings.TrimSpace(r.URL.Query().Get("period"))
+	ttl := 1 * time.Minute
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.ths.HotList(r.Context(), period)
+	})
+}
+
+// ---- Sina handlers ------------------------------------------------------
+
+func (s *server) sinaFinancialReport(w http.ResponseWriter, r *http.Request) {
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	if code == "" {
+		if spec, ok := s.resolveSpec(w, r); ok {
+			code = spec.Code
+		} else {
+			return
+		}
+	}
+	reportType := strings.TrimSpace(r.URL.Query().Get("type"))
+	num := intQuery(r, "num", 8)
+	ttl := 12 * time.Hour
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.sina.FinancialReport(r.Context(), code, reportType, num)
+	})
+}
+
+func (s *server) sinaOptionCodes(w http.ResponseWriter, r *http.Request) {
+	underlying := strings.TrimSpace(r.URL.Query().Get("underlying"))
+	call := strings.TrimSpace(r.URL.Query().Get("call")) != "false"
+	ttl := 30 * time.Minute
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.sina.OptionCodes(r.Context(), underlying, call)
+	})
+}
+
+func (s *server) sinaOptionTQuote(w http.ResponseWriter, r *http.Request) {
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	if code == "" {
+		writeJSON(w, http.StatusBadRequest, response{OK: false, Error: "missing code"})
+		return
+	}
+	ttl := 2 * time.Second
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.sina.OptionTQuote(r.Context(), code)
+	})
+}
+
+func (s *server) sinaOptionGreeks(w http.ResponseWriter, r *http.Request) {
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	if code == "" {
+		writeJSON(w, http.StatusBadRequest, response{OK: false, Error: "missing code"})
+		return
+	}
+	ttl := 2 * time.Second
+	s.serveWithCache(w, r, ttl, func() (any, error) {
+		return s.sina.OptionGreeks(r.Context(), code)
+	})
+}
+
+// ---- iwencai handlers ---------------------------------------------------
+
+func (s *server) iwencaiSearch(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	if query == "" {
+		writeJSON(w, http.StatusBadRequest, response{OK: false, Error: "missing query"})
+		return
+	}
+	channel := strings.TrimSpace(r.URL.Query().Get("channel"))
+	size := intQuery(r, "size", 50)
+	data, err := s.iwencai.Search(r.Context(), query, channel, size)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, response{OK: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, response{OK: true, Data: data})
+}
+
+func (s *server) iwencaiQuery(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	if query == "" {
+		writeJSON(w, http.StatusBadRequest, response{OK: false, Error: "missing query"})
+		return
+	}
+	page := intQuery(r, "page", 1)
+	limit := intQuery(r, "limit", 50)
+	data, err := s.iwencai.Query(r.Context(), query, page, limit)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, response{OK: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, response{OK: true, Data: data})
 }
 
 // ---- Xueqiu handlers ----------------------------------------------------

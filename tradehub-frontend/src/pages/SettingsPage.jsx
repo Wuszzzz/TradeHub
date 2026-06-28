@@ -586,7 +586,7 @@ const NotificationRulesCard = () => {
     if (!keyword) return;
     try {
       const res = await fundsAPI.search(keyword);
-      setFunds(res.data);
+      setFunds(res.data?.results || res.data || []);
     } catch {
       // ignore
     }
@@ -758,10 +758,7 @@ const NotificationRulesCard = () => {
               placeholder="输入基金代码或名称搜索"
               filterOption={false}
               onSearch={handleFundSearch}
-              options={funds.results
-                ? funds.results.map(f => ({ value: f.id, label: `${f.fund_name}（${f.fund_code}）` }))
-                : (Array.isArray(funds) ? funds.map(f => ({ value: f.id, label: `${f.fund_name}（${f.fund_code}）` })) : [])
-              }
+              options={funds.map(f => ({ value: f.id, label: `${f.fund_name}（${f.fund_code}）` }))}
             />
           </Form.Item>
           <Form.Item name="rule_type" label="触发条件" rules={[{ required: true }]}>

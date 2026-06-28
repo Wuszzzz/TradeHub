@@ -12,7 +12,10 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"stock/cmd/market-api/internal/cninfo"
 	"stock/cmd/market-api/internal/eastmoney"
+	"stock/cmd/market-api/internal/iwencai"
+	"stock/cmd/market-api/internal/sina"
 	"stock/cmd/market-api/internal/sohu"
 	"stock/cmd/market-api/internal/tencent"
 	"stock/cmd/market-api/internal/ths"
@@ -22,8 +25,11 @@ import (
 type server struct {
 	tencent   *tencent.Client
 	eastmoney *eastmoney.Client
+	cninfo    *cninfo.Client
 	sohu      *sohu.Client
+	sina      *sina.Client
 	ths       *ths.Client
+	iwencai   *iwencai.Client
 	xueqiu    *xueqiu.Client
 	cache     *memoryCache
 	sf        singleflight.Group
@@ -45,8 +51,11 @@ func main() {
 	s := &server{
 		tencent:   tencent.New(5 * time.Second),
 		eastmoney: eastmoney.New(8 * time.Second),
+		cninfo:    cninfo.New(8 * time.Second),
 		sohu:      sohu.New(6 * time.Second),
+		sina:      sina.New(8 * time.Second),
 		ths:       ths.New(6 * time.Second),
+		iwencai:   iwencai.New(30*time.Second, getenv("IWENCAI_BASE_URL", "https://openapi.iwencai.com"), getenv("IWENCAI_API_KEY", "")),
 		xueqiu:    xueqiu.New(8*time.Second, getenv("XUEQIU_COOKIE", "")),
 		cache:     newMemoryCache(),
 	}
@@ -67,6 +76,15 @@ func main() {
 	mux.HandleFunc("GET /api/v1/eastmoney/flow/snapshot", s.eastmoneyFlowSnapshot)
 	mux.HandleFunc("GET /api/v1/eastmoney/flow/intraday", s.eastmoneyFlowIntraday)
 	mux.HandleFunc("GET /api/v1/eastmoney/flow/daily", s.eastmoneyFlowDaily)
+	mux.HandleFunc("GET /api/v1/eastmoney/boards/industry-rank", s.eastmoneyIndustryRank)
+	mux.HandleFunc("GET /api/v1/eastmoney/boards/concepts", s.eastmoneyConceptBlocks)
+	mux.HandleFunc("GET /api/v1/eastmoney/datacenter", s.eastmoneyDataCenter)
+	mux.HandleFunc("GET /api/v1/eastmoney/reports", s.eastmoneyReports)
+	mux.HandleFunc("GET /api/v1/eastmoney/news/stock", s.eastmoneyStockNews)
+	mux.HandleFunc("GET /api/v1/eastmoney/news/global", s.eastmoneyGlobalNews)
+	mux.HandleFunc("GET /api/v1/eastmoney/limit-up/pool", s.eastmoneyLimitPool)
+
+	mux.HandleFunc("GET /api/v1/cninfo/announcements", s.cninfoAnnouncements)
 
 	mux.HandleFunc("GET /api/v1/sohu/snapshot", s.sohuSnapshot)
 	mux.HandleFunc("GET /api/v1/sohu/kline", s.sohuKline)
@@ -81,6 +99,17 @@ func main() {
 	mux.HandleFunc("GET /api/v1/ths/snapshot", s.thsSnapshot)
 	mux.HandleFunc("GET /api/v1/ths/minute", s.thsMinute)
 	mux.HandleFunc("GET /api/v1/ths/kline", s.thsKline)
+	mux.HandleFunc("GET /api/v1/ths/hot-reason", s.thsHotReason)
+	mux.HandleFunc("GET /api/v1/ths/northbound", s.thsNorthbound)
+	mux.HandleFunc("GET /api/v1/ths/hot-list", s.thsHotList)
+
+	mux.HandleFunc("GET /api/v1/sina/financial-report", s.sinaFinancialReport)
+	mux.HandleFunc("GET /api/v1/sina/options/contracts", s.sinaOptionCodes)
+	mux.HandleFunc("GET /api/v1/sina/options/tquote", s.sinaOptionTQuote)
+	mux.HandleFunc("GET /api/v1/sina/options/greeks", s.sinaOptionGreeks)
+
+	mux.HandleFunc("GET /api/v1/iwencai/search", s.iwencaiSearch)
+	mux.HandleFunc("GET /api/v1/iwencai/query", s.iwencaiQuery)
 
 	mux.HandleFunc("GET /api/v1/xueqiu/snapshot", s.xueqiuSnapshot)
 	mux.HandleFunc("GET /api/v1/xueqiu/kline", s.xueqiuKline)

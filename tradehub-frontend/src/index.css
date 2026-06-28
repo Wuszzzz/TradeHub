@@ -1335,16 +1335,35 @@ button {
 
 .fund-trend-card {
   overflow: hidden;
-  border: 1px solid rgba(15, 111, 255, 0.18) !important;
+  position: relative;
+  border: 1px solid rgba(15, 111, 255, 0.16) !important;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 255, 0.96)),
-    radial-gradient(circle at 0% 0%, rgba(15, 111, 255, 0.12), transparent 26%) !important;
+    radial-gradient(circle at 12% 4%, rgba(15, 111, 255, 0.15), transparent 32%),
+    radial-gradient(circle at 92% 18%, rgba(32, 180, 134, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(245, 249, 255, 0.96)) !important;
+}
+
+.fund-trend-card::before {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  background:
+    linear-gradient(120deg, transparent 0 62%, rgba(15, 111, 255, 0.06) 62% 74%, transparent 74%),
+    repeating-linear-gradient(90deg, rgba(15, 23, 42, 0.025) 0 1px, transparent 1px 72px);
 }
 
 .fund-trend-card .ant-card-head {
   min-height: 76px;
-  border-bottom-color: rgba(15, 111, 255, 0.12) !important;
-  background: linear-gradient(90deg, rgba(15, 111, 255, 0.05), rgba(255, 255, 255, 0.8)) !important;
+  position: relative;
+  z-index: 1;
+  border-bottom-color: rgba(15, 111, 255, 0.10) !important;
+  background: linear-gradient(90deg, rgba(15, 111, 255, 0.07), rgba(255, 255, 255, 0.78)) !important;
+}
+
+.fund-trend-card .ant-card-body {
+  position: relative;
+  z-index: 1;
 }
 
 .fund-trend-title {
@@ -1374,9 +1393,10 @@ button {
 .fund-trend-return {
   min-width: 116px;
   padding: 8px 12px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 14px;
-  background: #fff;
+  border: 1px solid rgba(15, 111, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
   text-align: right;
 }
 
@@ -1408,11 +1428,13 @@ button {
   justify-content: space-between;
   gap: 16px;
   align-items: flex-end;
-  margin-bottom: 14px;
+  margin: 16px 0 12px;
 }
 
 .fund-range-pill {
   border-radius: 999px !important;
+  border-color: rgba(15, 111, 255, 0.18) !important;
+  font-weight: 700 !important;
 }
 
 .fund-trend-meta {
@@ -1420,27 +1442,80 @@ button {
   text-align: right;
 }
 
-.fund-trend-meta strong {
-  display: block;
-  color: var(--trade-text);
-  font-size: 22px;
-  line-height: 1.1;
+.fund-trend-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
 
-.fund-trend-meta em {
+.fund-trend-summary > div {
+  min-height: 86px;
+  padding: 16px;
+  border: 1px solid rgba(15, 111, 255, 0.10);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(248, 251, 255, 0.74));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.fund-trend-summary span {
+  display: block;
   color: var(--trade-muted);
+  font-size: 12px;
+}
+
+.fund-trend-summary strong {
+  display: block;
+  margin-top: 8px;
+  color: #111827;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.fund-trend-summary em {
+  display: block;
+  margin-top: 8px;
+  color: #667085;
   font-size: 12px;
   font-style: normal;
 }
 
+.fund-trend-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fund-trend-legend i {
+  display: inline-block;
+  width: 20px;
+  height: 4px;
+  border-radius: 999px;
+}
+
+.fund-trend-legend .nav {
+  background: linear-gradient(90deg, #0f6fff, #20b486);
+}
+
+.fund-trend-legend .estimate {
+  background: repeating-linear-gradient(90deg, #d99000 0 6px, transparent 6px 10px);
+}
+
 .fund-trend-chart {
-  min-height: 380px;
-  padding: 12px 12px 4px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 18px;
+  min-height: 420px;
+  padding: 4px 4px 0;
+  border: 1px solid rgba(15, 111, 255, 0.10);
+  border-radius: 22px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(249, 251, 255, 0.92)),
-    repeating-linear-gradient(0deg, rgba(15, 23, 42, 0.025) 0, rgba(15, 23, 42, 0.025) 1px, transparent 1px, transparent 48px);
+    radial-gradient(circle at 50% 0%, rgba(15, 111, 255, 0.10), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(248, 251, 255, 0.76)),
+    repeating-linear-gradient(0deg, rgba(15, 23, 42, 0.03) 0, rgba(15, 23, 42, 0.03) 1px, transparent 1px, transparent 56px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92), 0 18px 48px rgba(15, 23, 42, 0.07);
 }
 
 .fund-asset-split {
@@ -2399,8 +2474,20 @@ body,
     flex-direction: column;
   }
 
+  .fund-trend-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fund-trend-summary strong {
+    font-size: 20px;
+  }
+
   .fund-trend-meta {
     text-align: left;
+  }
+
+  .fund-trend-chart {
+    min-height: 360px;
   }
 
   .terminal-security-tabs {

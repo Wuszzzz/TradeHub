@@ -27,6 +27,7 @@ const canTryLoadHoldings = (fundData) => {
 };
 
 const communityRequestCache = new Map();
+const unwrapList = (payload) => payload?.results || payload?.data?.results || payload || [];
 const { Text } = Typography;
 
 const FundDetailPage = () => {
@@ -311,11 +312,19 @@ const FundDetailPage = () => {
       return;
     }
     try {
-      const { data } = await fundsAPI.sectorMarketSnapshots({ board_code: 'industry', latest: 1, page_size: 500 });
-      const rows = data?.results || data || [];
+      const responses = await Promise.all(names.map((name) => (
+        fundsAPI.sectorMarketSnapshots({
+          board_code: 'industry',
+          latest: 1,
+          keyword: name,
+          page_size: 5,
+        }).catch(() => null)
+      )));
       const nextMap = {};
-      rows.forEach((item) => {
-        nextMap[item.sector_name] = item;
+      responses.forEach((response) => {
+        unwrapList(response?.data).forEach((item) => {
+          nextMap[item.sector_name] = item;
+        });
       });
       setSectorMarketMap(nextMap);
     } catch {
@@ -378,60 +387,6 @@ const FundDetailPage = () => {
 
     loadData();
   }, [code, preferredSource]);
-
-  // ECharts 配置
-  const chartOption = useMemo(() => ({
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'cross' }
-    },
-    xAxis: {
-      type: 'category',
-      data: navHistory.map(item => item.nav_date),
-      axisLabel: {
-        rotate: window.innerWidth < 768 ? 45 : 0
-      }
-    },
-    yAxis: {
-      type: 'value',
-      scale: true
-    },
-    series: [
-      {
-        name: '单位净值',
-        type: 'line',
-        data: navHistory.map(item => parseFloat(item.unit_nav)),
-        smooth: true,
-        markPoint: {
-          data: operations.map(op => {
-            // 找到操作日期在图表中的索引
-            const dateIndex = navHistory.findIndex(item => item.nav_date === op.operation_date);
-            if (dateIndex === -1) return null;
-
-            return {
-              name: op.operation_type === 'BUY' ? '买入' : '卖出',
-              coord: [dateIndex, parseFloat(op.nav)],
-              value: op.operation_type === 'BUY' ? '买' : '卖',
-              itemStyle: {
-                color: op.operation_type === 'BUY' ? '#cf1322' : '#3f8600'
-              },
-              label: {
-                show: true,
-                formatter: '{c}',
-                color: '#fff'
-              }
-            };
-          }).filter(item => item !== null)
-        }
-      }
-    ],
-    grid: {
-      left: '3%',
-      right: '4%',
-      bottom: '10%',
-      containLabel: true
-    }
-  }), [navHistory, positions, operations, intraday]);
 
   // 持仓穿透 30s 自动刷新
   useEffect(() => {
@@ -522,10 +477,196 @@ const FundDetailPage = () => {
   }[timeRange] || timeRange;
   const latestNavPoint = navHistory[navHistory.length - 1];
   const firstNavPoint = navHistory[0];
+  const navValues = navHistory.map((item) => Number(item.unit_nav)).filter((value) => Number.isFinite(value));
+  const minNav = navValues.length ? Math.min(...navValues) : null;
+  const maxNav = navValues.length ? Math.max(...navValues) : null;
+  const estimateLineValue = estimate?.estimate_nav ? Number(estimate.estimate_nav) : null;
   const trendReturn = firstNavPoint?.unit_nav && latestNavPoint?.unit_nav
     ? ((Number(latestNavPoint.unit_nav) - Number(firstNavPoint.unit_nav)) / Number(firstNavPoint.unit_nav)) * 100
     : null;
   const trendReturnClass = Number(trendReturn) >= 0 ? 'up' : 'down';
+
+  const chartOption = useMemo(() => ({
+    backgroundColor: 'transparent',
+    color: ['#0f6fff', '#d99000'],
+    tooltip: {
+      trigger: 'axis',
+      appendToBody: true,
+      backgroundColor: 'rgba(12, 20, 33, 0.92)',
+      borderWidth: 0,
+      padding: [10, 12],
+      textStyle: { color: '#f8fafc', fontSize: 12 },
+      axisPointer: {
+        type: 'line',
+        lineStyle: { color: 'rgba(15, 111, 255, 0.42)', width: 1.5 },
+      },
+      formatter: (params = []) => {
+        const date = params[0]?.axisValue || '';
+        const rows = params.map((item) => {
+          const value = Number(item.value);
+          return `<div style="display:flex;justify-content:space-between;gap:18px;margin-top:4px;">
+            <span>${item.marker}${item.seriesName}</span>
+            <b>${Number.isFinite(value) ? value.toFixed(4) : '--'}</b>
+          </div>`;
+        }).join('');
+        return `<div style="font-weight:700;margin-bottom:6px;">${date}</div>${rows}`;
+      },
+    },
+    legend: {
+      right: 18,
+      top: 12,
+      itemWidth: 18,
+      itemHeight: 8,
+      textStyle: { color: '#475467', fontSize: 12 },
+      data: ['单位净值', '实时估值'],
+    },
+    grid: { left: 42, right: 28, top: 58, bottom: 34, containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: navHistory.map(item => item.nav_date),
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: 'rgba(15, 23, 42, 0.12)' } },
+      axisLabel: {
+        color: '#667085',
+        hideOverlap: true,
+        margin: 14,
+        rotate: window.innerWidth < 768 ? 35 : 0,
+      },
+    },
+    yAxis: {
+      type: 'value',
+      scale: true,
+      axisLabel: { color: '#667085', formatter: (value) => Number(value).toFixed(3) },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      splitLine: { lineStyle: { color: 'rgba(15, 23, 42, 0.07)', type: 'dashed' } },
+    },
+    dataZoom: navHistory.length > 80 ? [
+      { type: 'inside', start: 0, end: 100 },
+      {
+        type: 'slider',
+        height: 18,
+        bottom: 4,
+        borderColor: 'transparent',
+        fillerColor: 'rgba(15, 111, 255, 0.14)',
+        handleStyle: { color: '#0f6fff' },
+        textStyle: { color: '#98a2b3' },
+      },
+    ] : [{ type: 'inside', start: 0, end: 100 }],
+    series: [
+      {
+        name: '单位净值',
+        type: 'line',
+        data: navHistory.map(item => Number(item.unit_nav)),
+        smooth: 0.32,
+        symbol: 'circle',
+        symbolSize: navHistory.length > 90 ? 0 : 5,
+        showSymbol: navHistory.length <= 90,
+        lineStyle: {
+          width: 3,
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 1,
+            y2: 0,
+            colorStops: [
+              { offset: 0, color: '#0f6fff' },
+              { offset: 0.58, color: '#23a6d5' },
+              { offset: 1, color: '#20b486' },
+            ],
+          },
+          shadowColor: 'rgba(15, 111, 255, 0.24)',
+          shadowBlur: 12,
+        },
+        itemStyle: { color: '#0f6fff', borderColor: '#fff', borderWidth: 2 },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(15, 111, 255, 0.22)' },
+              { offset: 0.62, color: 'rgba(32, 180, 134, 0.08)' },
+              { offset: 1, color: 'rgba(255, 255, 255, 0)' },
+            ],
+          },
+        },
+        markPoint: {
+          symbolSize: 34,
+          data: operations.map(op => {
+            const dateIndex = navHistory.findIndex(item => item.nav_date === op.operation_date);
+            if (dateIndex === -1) return null;
+            return {
+              name: op.operation_type === 'BUY' ? '买入' : '卖出',
+              coord: [dateIndex, Number(op.nav)],
+              value: op.operation_type === 'BUY' ? '买' : '卖',
+              itemStyle: { color: op.operation_type === 'BUY' ? '#cf1322' : '#0f9f6e' },
+              label: { show: true, formatter: '{c}', color: '#fff', fontWeight: 700 },
+            };
+          }).filter(Boolean),
+        },
+      },
+      {
+        name: '实时估值',
+        type: 'line',
+        data: navHistory.map(() => Number.isFinite(estimateLineValue) ? estimateLineValue : null),
+        smooth: true,
+        symbol: 'none',
+        connectNulls: true,
+        lineStyle: { width: 2, color: '#d99000', type: 'dashed' },
+      },
+    ],
+  }), [navHistory, operations, estimateLineValue]);
+
+  const intradayChartOption = useMemo(() => ({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(12, 20, 33, 0.92)',
+      borderWidth: 0,
+      textStyle: { color: '#f8fafc' },
+    },
+    grid: { left: 42, right: 28, top: 34, bottom: 34, containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: intraday.map(s => new Date(s.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })),
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: 'rgba(15, 23, 42, 0.12)' } },
+      axisLabel: { color: '#667085' },
+    },
+    yAxis: {
+      type: 'value',
+      scale: true,
+      axisLabel: { color: '#667085', formatter: (value) => Number(value).toFixed(3) },
+      splitLine: { lineStyle: { color: 'rgba(15, 23, 42, 0.07)', type: 'dashed' } },
+    },
+    series: [{
+      name: '当日估值',
+      type: 'line',
+      data: intraday.map(s => Number(s.estimate_nav)),
+      smooth: 0.35,
+      symbol: 'none',
+      lineStyle: { width: 3, color: '#d99000', shadowColor: 'rgba(217, 144, 0, 0.2)', shadowBlur: 10 },
+      areaStyle: {
+        color: {
+          type: 'linear',
+          x: 0,
+          y: 0,
+          x2: 0,
+          y2: 1,
+          colorStops: [
+            { offset: 0, color: 'rgba(217, 144, 0, 0.22)' },
+            { offset: 1, color: 'rgba(217, 144, 0, 0)' },
+          ],
+        },
+      },
+    }],
+  }), [intraday]);
 
   useEffect(() => {
     loadSectorMarkets(displayIndustries.map((item) => item.name));
@@ -720,7 +861,7 @@ const FundDetailPage = () => {
         title={(
           <div className="fund-trend-title">
             <span>基金走势</span>
-            <strong>历史净值 / 估值走势</strong>
+            <strong>净值曲线</strong>
             <small>{activeRangeLabel} · {timeRange === 'INTRADAY' ? intraday.length : navHistory.length} 个数据点</small>
           </div>
         )}
@@ -731,6 +872,28 @@ const FundDetailPage = () => {
           </div>
         )}
       >
+        <div className="fund-trend-summary">
+          <div>
+            <span>最新单位净值</span>
+            <strong>{latestNavPoint?.unit_nav || fund.latest_nav || '-'}</strong>
+            <em>{latestNavPoint?.nav_date || fund.latest_nav_date || '-'}</em>
+          </div>
+          <div>
+            <span>区间高点</span>
+            <strong>{maxNav != null ? maxNav.toFixed(4) : '-'}</strong>
+            <em>历史净值</em>
+          </div>
+          <div>
+            <span>区间低点</span>
+            <strong>{minNav != null ? minNav.toFixed(4) : '-'}</strong>
+            <em>历史净值</em>
+          </div>
+          <div>
+            <span>实时估值</span>
+            <strong>{estimate?.estimate_nav || '-'}</strong>
+            <em>{estimate?.estimate_growth != null ? `${Number(estimate.estimate_growth) >= 0 ? '+' : ''}${Number(estimate.estimate_growth).toFixed(2)}%` : '估值线'}</em>
+          </div>
+        </div>
         <div className="fund-trend-toolbar">
           <div>
             <span className="fund-trend-label">周期切换</span>
@@ -746,26 +909,23 @@ const FundDetailPage = () => {
             </Space>
           </div>
           <div className="fund-trend-meta">
-            <span>最新净值</span>
-            <strong>{latestNavPoint?.unit_nav || fund.latest_nav || '-'}</strong>
-            <em>{latestNavPoint?.nav_date || fund.latest_nav_date || '-'}</em>
+            <span>图例</span>
+            <div className="fund-trend-legend">
+              <i className="nav" />单位净值
+              <i className="estimate" />实时估值
+            </div>
           </div>
         </div>
         <div className="fund-trend-chart">
           {timeRange === 'INTRADAY' ? (
             intraday.length > 0 ? (
               <ReactECharts
-                option={{
-                  tooltip: { trigger: 'axis' },
-                  xAxis: { type: 'category', data: intraday.map(s => new Date(s.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })) },
-                  yAxis: { type: 'value', scale: true },
-                  series: [{ type: 'line', data: intraday.map(s => parseFloat(s.estimate_nav)), smooth: true }],
-                }}
-                style={{ height: 360 }}
+                option={intradayChartOption}
+                style={{ height: 390 }}
               />
             ) : <Empty description="暂无当日估值数据" />
           ) : navHistory.length > 0 ? (
-            <ReactECharts option={chartOption} style={{ height: 420 }} />
+            <ReactECharts option={chartOption} style={{ height: 430 }} />
           ) : (
             <Empty description="暂无历史数据" />
           )}

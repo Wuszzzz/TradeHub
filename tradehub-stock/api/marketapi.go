@@ -94,6 +94,14 @@ func (c *MarketAPIClient) get(ctx context.Context, path string, query map[string
 	return nil
 }
 
+func (c *MarketAPIClient) rawGet(ctx context.Context, path string, query map[string]string) (map[string]any, error) {
+	var data map[string]any
+	if err := c.get(ctx, path, query, &data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 // ----- 类型定义：与 plugin/cmd/market-api/internal/tencent 中保持一致 -----
 
 type marketAPISnapshot struct {

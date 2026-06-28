@@ -9,6 +9,7 @@ import { usePreference } from '../contexts/PreferenceContext';
 
 const { Text } = Typography;
 const { useBreakpoint } = Grid;
+const unwrapList = (payload) => payload?.results || payload?.data?.results || payload || [];
 
 // 可调整大小的表头组件
 const ResizableTitle = (props) => {
@@ -104,15 +105,24 @@ const FundsPage = () => {
       setSectorMap({});
       return;
     }
-    const results = await Promise.all(
-      fundList.map((fund) => fundsAPI.allocationSnapshots({
-        fund_code: fund.fund_code,
+    try {
+      const codes = fundList.map((fund) => fund.fund_code).filter(Boolean);
+      const response = await fundsAPI.allocationSnapshots({
         allocation_type: 'industry',
-      })
-        .then((res) => [fund.fund_code, (res.data?.results || res.data || []).slice(0, 3)])
-        .catch(() => [fund.fund_code, []]))
-    );
-    setSectorMap(Object.fromEntries(results));
+        fund_codes: codes.join(','),
+        page_size: Math.min(codes.length * 6, 100),
+      });
+      const nextMap = {};
+      unwrapList(response.data).forEach((item) => {
+        if (!nextMap[item.fund_code]) nextMap[item.fund_code] = [];
+        if (nextMap[item.fund_code].length < 3) {
+          nextMap[item.fund_code].push(item);
+        }
+      });
+      setSectorMap(nextMap);
+    } catch {
+      setSectorMap({});
+    }
   };
 
   // 加载估值和净值数据

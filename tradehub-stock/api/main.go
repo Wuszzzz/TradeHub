@@ -481,6 +481,127 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/stock/v1/system/health", s.handleHealth)
 	s.mux.HandleFunc("/api/stock/v1/system/overview", s.handleOverview)
 	s.mux.HandleFunc("/api/stock/v1/market/sector-boards", s.handleSectorBoards)
+	s.mux.HandleFunc("/api/stock/v1/market/ticks", s.handleMarketAPIRaw("/api/v1/tencent/ticks"))
+	s.mux.HandleFunc("/api/stock/v1/market/order-book", s.handleMarketAPIRaw("/api/v1/sohu/order-book"))
+	s.mux.HandleFunc("/api/stock/v1/flows/intraday", s.handleMarketAPIRaw("/api/v1/eastmoney/flow/intraday"))
+	s.mux.HandleFunc("/api/stock/v1/flows/daily", s.handleMarketAPIRaw("/api/v1/eastmoney/flow/daily"))
+	s.mux.HandleFunc("/api/stock/v1/flows/snapshot", s.handleMarketAPIRaw("/api/v1/eastmoney/flow/snapshot"))
+	s.mux.HandleFunc("/api/stock/v1/boards/industries/rank", s.handleMarketAPIRaw("/api/v1/eastmoney/boards/industry-rank"))
+	s.mux.HandleFunc("/api/stock/v1/instruments/boards", s.handleMarketAPIRaw("/api/v1/eastmoney/boards/concepts"))
+	s.mux.HandleFunc("/api/stock/v1/margin-trading", s.handleDataCenterKind("margin"))
+	s.mux.HandleFunc("/api/stock/v1/signals/lockup-expiry", s.handleDataCenterKind("lockup"))
+	s.mux.HandleFunc("/api/stock/v1/shareholders/counts", s.handleDataCenterKind("holders"))
+	s.mux.HandleFunc("/api/stock/v1/corporate-actions/dividends", s.handleDataCenterKind("dividend"))
+	s.mux.HandleFunc("/api/stock/v1/limit-up/pool", s.handleMarketAPIRaw("/api/v1/eastmoney/limit-up/pool"))
+	s.mux.HandleFunc("/api/stock/v1/limit-up/sentiment", s.handleLimitUpSentiment)
+	s.mux.HandleFunc("/api/stock/v1/announcements", s.handleMarketAPIRaw("/api/v1/cninfo/announcements"))
+	s.mux.HandleFunc("/api/ai/v1/reports/stocks", s.handleMarketAPIRaw("/api/v1/eastmoney/reports"))
+	s.mux.HandleFunc("/api/ai/v1/reports/industries", s.handleIndustryReports)
+	s.mux.HandleFunc("/api/ai/v1/news/stocks", s.handleMarketAPIRaw("/api/v1/eastmoney/news/stock"))
+	s.mux.HandleFunc("/api/ai/v1/news/global", s.handleMarketAPIRaw("/api/v1/eastmoney/news/global"))
+	s.mux.HandleFunc("/api/stock/v1/fundamental/statements", s.handleMarketAPIRaw("/api/v1/sina/financial-report"))
+	s.mux.HandleFunc("/api/stock/v1/options/contracts", s.handleMarketAPIRaw("/api/v1/sina/options/contracts"))
+	s.mux.HandleFunc("/api/stock/v1/options/tquote", s.handleMarketAPIRaw("/api/v1/sina/options/tquote"))
+	s.mux.HandleFunc("/api/stock/v1/options/greeks", s.handleMarketAPIRaw("/api/v1/sina/options/greeks"))
+	s.mux.HandleFunc("/api/stock/v1/signals/hot-themes", s.handleMarketAPIRaw("/api/v1/ths/hot-reason"))
+	s.mux.HandleFunc("/api/stock/v1/signals/northbound/realtime", s.handleMarketAPIRaw("/api/v1/ths/northbound"))
+	s.mux.HandleFunc("/api/stock/v1/hot-rank/ths", s.handleMarketAPIRaw("/api/v1/ths/hot-list"))
+	s.mux.HandleFunc("/api/ai/v1/iwencai/search", s.handleMarketAPIRaw("/api/v1/iwencai/search"))
+	s.mux.HandleFunc("/api/ai/v1/iwencai/query", s.handleMarketAPIRaw("/api/v1/iwencai/query"))
+}
+
+func (s *Server) handleDataCenterKind(kind string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		q.Set("kind", kind)
+		r.URL.RawQuery = q.Encode()
+		s.handleMarketAPIRaw("/api/v1/eastmoney/datacenter")(w, r)
+	}
+}
+
+func (s *Server) handleMarketAPIRaw(path string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if s.adapter == nil || s.adapter.cn == nil || !s.adapter.cn.Enabled() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "MARKET_API_URL is not configured"})
+			return
+		}
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) > 0 {
+				query[key] = values[0]
+			}
+		}
+		data, err := s.adapter.cn.rawGet(r.Context(), path, query)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, data)
+	}
+}
+
+func (s *Server) handleIndustryReports(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	q.Set("q_type", "1")
+	r.URL.RawQuery = q.Encode()
+	s.handleMarketAPIRaw("/api/v1/eastmoney/reports")(w, r)
+}
+
+func (s *Server) handleLimitUpSentiment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.adapter == nil || s.adapter.cn == nil || !s.adapter.cn.Enabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"message": "MARKET_API_URL is not configured"})
+		return
+	}
+	date := strings.TrimSpace(r.URL.Query().Get("date"))
+	fetch := func(pool string) (map[string]any, error) {
+		q := map[string]string{"pool": pool}
+		if date != "" {
+			q["date"] = date
+		}
+		return s.adapter.cn.rawGet(r.Context(), "/api/v1/eastmoney/limit-up/pool", q)
+	}
+	zt, err := fetch("limit_up")
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"message": err.Error()})
+		return
+	}
+	zb, _ := fetch("broken")
+	dt, _ := fetch("limit_down")
+	ztRows := anySlice(zt["rows"])
+	zbRows := anySlice(zb["rows"])
+	dtRows := anySlice(dt["rows"])
+	maxBoards := 0
+	for _, row := range ztRows {
+		if m, ok := row.(map[string]any); ok {
+			if n := intFromAny(m["consecutive_boards"]); n > maxBoards {
+				maxBoards = n
+			}
+		}
+	}
+	ztCount := len(ztRows)
+	zbCount := len(zbRows)
+	breakRate := 0.0
+	if ztCount+zbCount > 0 {
+		breakRate = float64(zbCount) / float64(ztCount+zbCount) * 100
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"dataset":                "limit_up_sentiment",
+		"source":                 "tradehub",
+		"date":                   firstString(zt["date"], date),
+		"limit_up_count":         ztCount,
+		"broken_count":           zbCount,
+		"limit_down_count":       len(dtRows),
+		"break_rate_percent":     breakRate,
+		"max_consecutive_boards": maxBoards,
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -2244,6 +2365,42 @@ func fallback(value, defaultValue string) string {
 		return defaultValue
 	}
 	return value
+}
+
+func anySlice(v any) []any {
+	if rows, ok := v.([]any); ok {
+		return rows
+	}
+	return []any{}
+}
+
+func intFromAny(v any) int {
+	switch x := v.(type) {
+	case int:
+		return x
+	case int64:
+		return int(x)
+	case float64:
+		return int(x)
+	case json.Number:
+		n, _ := x.Int64()
+		return int(n)
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(x))
+		return n
+	default:
+		return 0
+	}
+}
+
+func firstString(values ...any) string {
+	for _, value := range values {
+		s := strings.TrimSpace(fmt.Sprint(value))
+		if s != "" && s != "<nil>" {
+			return s
+		}
+	}
+	return ""
 }
 
 func escape(value string) string {

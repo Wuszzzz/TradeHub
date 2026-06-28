@@ -6,6 +6,7 @@ API ViewSets
 import logging
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from django.shortcuts import get_object_or_404
@@ -39,6 +40,12 @@ from .services import recalculate_all_positions
 from fundval.config import config
 
 logger = logging.getLogger(__name__)
+
+
+class BoundedPageNumberPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 500
 
 
 def apply_fund_ranking_filters(queryset, category=None, min_size=None, max_size=None, industry=None, prefix=''):
@@ -1816,6 +1823,7 @@ class FundDailyFactViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = FundDailyFactSerializer
     permission_classes = [AllowAny]
+    pagination_class = BoundedPageNumberPagination
 
     def get_queryset(self):
         queryset = FundDailyFact.objects.select_related('fund')
@@ -1854,6 +1862,7 @@ class FundCompanyViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = FundCompanySerializer
     permission_classes = [AllowAny]
+    pagination_class = BoundedPageNumberPagination
     filter_backends = [filters.SearchFilter]
     search_fields = ['company_code', 'company_name', 'short_name']
 
@@ -1869,6 +1878,7 @@ class FundManagerViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = FundManagerSerializer
     permission_classes = [AllowAny]
+    pagination_class = BoundedPageNumberPagination
     filter_backends = [filters.SearchFilter]
     search_fields = ['manager_code', 'manager_name', 'company__company_name']
 
@@ -1895,6 +1905,7 @@ class FundManagerTenureViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = FundManagerTenureSerializer
     permission_classes = [AllowAny]
+    pagination_class = BoundedPageNumberPagination
 
     def get_queryset(self):
         queryset = FundManagerTenure.objects.select_related('fund', 'manager', 'manager__company')
@@ -1912,6 +1923,7 @@ class FundHoldingSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = FundHoldingSnapshotSerializer
     permission_classes = [AllowAny]
+    pagination_class = BoundedPageNumberPagination
 
     def get_queryset(self):
         queryset = FundHoldingSnapshot.objects.select_related('fund').prefetch_related('items')
@@ -1932,15 +1944,21 @@ class FundAllocationSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = FundAllocationSnapshotSerializer
     permission_classes = [AllowAny]
+    pagination_class = BoundedPageNumberPagination
 
     def get_queryset(self):
         queryset = FundAllocationSnapshot.objects.select_related('fund')
         fund_code = self.request.query_params.get('fund_code')
+        fund_codes = self.request.query_params.get('fund_codes')
         allocation_type = self.request.query_params.get('allocation_type')
         report_date = self.request.query_params.get('report_date')
         name = self.request.query_params.get('name')
         if fund_code:
             queryset = queryset.filter(fund__fund_code=fund_code)
+        if fund_codes:
+            codes = [code.strip() for code in fund_codes.split(',') if code.strip()]
+            if codes:
+                queryset = queryset.filter(fund__fund_code__in=codes)
         if allocation_type:
             queryset = queryset.filter(allocation_type=allocation_type)
         if report_date:
@@ -1955,6 +1973,7 @@ class FundPerformanceRankSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = FundPerformanceRankSnapshotSerializer
     permission_classes = [AllowAny]
+    pagination_class = BoundedPageNumberPagination
 
     def get_queryset(self):
         queryset = FundPerformanceRankSnapshot.objects.select_related('fund')
@@ -2000,6 +2019,7 @@ class FundEvaluationSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = FundEvaluationSnapshotSerializer
     permission_classes = [AllowAny]
+    pagination_class = BoundedPageNumberPagination
 
     def get_queryset(self):
         queryset = FundEvaluationSnapshot.objects.select_related('fund')
@@ -2031,6 +2051,7 @@ class FundSectorMarketSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
 
     serializer_class = FundSectorMarketSnapshotSerializer
     permission_classes = [AllowAny]
+    pagination_class = BoundedPageNumberPagination
 
     def get_queryset(self):
         queryset = FundSectorMarketSnapshot.objects.all()
