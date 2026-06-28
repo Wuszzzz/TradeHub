@@ -199,32 +199,29 @@ curl -X POST http://127.0.0.1:7001/api/auth/login \
 
 ### 7.1 回补 1 年基金净值
 
-推荐先小批量验证：
+推荐直接使用一键初始化脚本。脚本会先小批量验证，再按分片并行回补 1 年净值，最后触发 Go 评估快照并输出数据库汇总：
 
 ```bash
-docker compose exec fund-backend python manage.py sync_nav_history \
-  --days 365 \
-  --limit 20 \
-  --batch-size 20
+chmod +x scripts/bootstrap_fund_data_1y.sh
+PARTS=4 BATCH_SIZE=200 ./scripts/bootstrap_fund_data_1y.sh
 ```
 
-确认无明显数据源错误后，后台跑全量 1 年回补：
+如果希望后台执行：
 
 ```bash
 mkdir -p logs
-nohup docker compose exec -T fund-backend python -u manage.py sync_nav_history \
-  --days 365 \
-  --batch-size 200 \
-  > logs/sync_nav_history_1y.log 2>&1 &
+nohup env PARTS=4 BATCH_SIZE=200 ./scripts/bootstrap_fund_data_1y.sh \
+  > logs/bootstrap_fund_data_1y.log 2>&1 &
 ```
 
 查看进度：
 
 ```bash
-tail -f logs/sync_nav_history_1y.log
+tail -f logs/bootstrap_fund_data_1y.log
+tail -f logs/sync_nav_history_1y_part_0.log
 ```
 
-如果服务器资源较小，建议分片执行，避免一次跑完 2 万多只基金：
+如果需要手动分片，可以直接调用管理命令：
 
 ```bash
 docker compose exec -T fund-backend python manage.py sync_nav_history \
@@ -240,9 +237,20 @@ docker compose exec -T fund-backend python manage.py sync_nav_history \
   --batch-size 100
 ```
 
+脚本参数：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DAYS` | `365` | 净值回补天数 |
+| `WINDOW_DAYS` | `370` | Go 评估计算窗口 |
+| `PARTS` | `4` | 并行分片数 |
+| `BATCH_SIZE` | `200` | 每批基金数量 |
+| `VERIFY_LIMIT` | `20` | 正式回补前的小批量验证数量，设为 `0` 可跳过 |
+| `LOG_DIR` | `logs` | 日志目录 |
+
 ### 7.2 生成 Go 基金评估快照
 
-净值回补完成后，由 Go 投研服务批量计算基金评估指标并写入 `fund_evaluation_snapshot`：
+如果没有使用一键脚本，净值回补完成后需要手动调用 Go 投研服务批量计算基金评估指标并写入 `fund_evaluation_snapshot`：
 
 ```bash
 curl -X POST http://127.0.0.1:17081/api/fund-research/v1/sync/evaluations \
