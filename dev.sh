@@ -22,6 +22,7 @@ usage() {
   echo "  stock        启动股票后端（Go :7002）"
   echo "  worker       启动股票后台任务（Go worker）"
   echo "  market       启动行情网关（Go :17080）"
+  echo "  fund-research 启动基金投研服务（Go :17081）"
   echo "  frontend     启动前端（Vite :5173）"
   echo ""
   echo "工具命令："
@@ -44,6 +45,7 @@ start() {
   echo "  ./dev.sh fund      # 基金后端 :7001"
   echo "  ./dev.sh stock     # 股票后端 :7002"
   echo "  ./dev.sh market    # 行情网关 :17080"
+  echo "  ./dev.sh fund-research # 基金投研 :17081"
   echo "  ./dev.sh frontend  # 前端 :5173"
 }
 
@@ -64,6 +66,7 @@ status() {
   echo -n "fund-backend (:7001):  " && curl -sf http://localhost:7001/api/health/ > /dev/null 2>&1 && echo "运行中" || echo "未运行"
   echo -n "stock-api    (:7002):  " && curl -sf http://localhost:7002/healthz > /dev/null 2>&1 && echo "运行中" || echo "未运行"
   echo -n "market-api   (:17080): " && curl -sf http://localhost:17080/health > /dev/null 2>&1 && echo "运行中" || echo "未运行"
+  echo -n "fund-research(:17081): " && curl -sf http://localhost:17081/health > /dev/null 2>&1 && echo "运行中" || echo "未运行"
   echo -n "frontend     (:5173):  " && curl -sf http://localhost:5173/ > /dev/null 2>&1 && echo "运行中" || echo "未运行"
 }
 
@@ -79,6 +82,7 @@ health() {
   echo -n "  fund-backend  (7001): " && curl -sf http://localhost:7001/api/health/ > /dev/null 2>&1 && echo "OK" || echo "FAIL"
   echo -n "  stock-api     (7002): " && curl -sf http://localhost:7002/healthz > /dev/null 2>&1 && echo "OK" || echo "FAIL"
   echo -n "  market-api   (17080): " && curl -sf http://localhost:17080/health > /dev/null 2>&1 && echo "OK" || echo "FAIL"
+  echo -n "  fund-research(17081): " && curl -sf http://localhost:17081/health > /dev/null 2>&1 && echo "OK" || echo "FAIL"
 }
 
 logs() {
@@ -139,6 +143,18 @@ market() {
   MARKET_API_ADDR=":17080" go run ./cmd/market-api
 }
 
+fund_research() {
+  echo "启动基金投研服务（Go :17081）..."
+  [ -f .env ] && export $(grep -v '^#' .env | xargs)
+  export POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
+  export POSTGRES_PORT="${POSTGRES_PORT:-5433}"
+  export POSTGRES_DB="${POSTGRES_DB:-${FUND_DB:-fundval}}"
+  export POSTGRES_USER="${POSTGRES_USER:-${FUND_DB_USER:-fundval}}"
+  export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-${FUND_DB_PASSWORD:-tradehub_local_password}}"
+  cd tradehub-fund-research
+  FUND_RESEARCH_ADDR=":17081" go run ./cmd/fund-research
+}
+
 frontend() {
   echo "启动前端（Vite :5173）..."
   [ -f .env ] && export $(grep -v '^#' .env | xargs)
@@ -170,6 +186,7 @@ case "${1:-help}" in
   stock)    stock ;;
   worker)   worker ;;
   market)   market ;;
+  fund-research) fund_research ;;
   frontend) frontend ;;
   migrate)  migrate ;;
   shell-db) docker compose -f $COMPOSE_FILE exec postgres psql -U postgres ;;

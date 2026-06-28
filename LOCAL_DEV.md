@@ -12,6 +12,7 @@
 | 业务服务 | fund backend | `./dev.sh fund` | `127.0.0.1:7001` |
 | 业务服务 | stock api | `./dev.sh stock` | `127.0.0.1:7002` |
 | 业务服务 | market api | `./dev.sh market` | `127.0.0.1:17080` |
+| 业务服务 | fund research | `./dev.sh fund-research` | `127.0.0.1:17081` |
 | 业务服务 | frontend | `./dev.sh frontend` | `127.0.0.1:5173` |
 
 不要把当前本地开发理解为 `docker compose up -d` 启动全部应用。`docker-compose.local.yml` 是当前本地事实，根目录 `docker-compose.yml` 后续需要按真实路径重修后才能作为一体化编排入口。
@@ -30,6 +31,10 @@ cp .env.example .env
 
 ```bash
 ./dev.sh market
+```
+
+```bash
+./dev.sh fund-research
 ```
 
 ```bash
@@ -57,6 +62,7 @@ cp .env.example .env
 | fund backend | `curl -sf http://127.0.0.1:7001/api/health/` |
 | stock api | `curl -sf http://127.0.0.1:7002/healthz` |
 | market api | `curl -sf http://127.0.0.1:17080/health` |
+| fund research | `curl -sf http://127.0.0.1:17081/health` |
 | frontend | `curl -sf http://127.0.0.1:5173/` |
 
 ## 4. 数据库
@@ -86,6 +92,7 @@ TDengine 用于股票时序数据，默认 database 为 `stock_etf_ts`。
 | `TDENGINE_HOST` | `localhost` | 宿主机访问 Docker TDengine |
 | `TDENGINE_PORT` | `16042` | TDengine REST 端口 |
 | `MARKET_API_URL` | `http://localhost:17080` | 股票后端访问行情网关 |
+| `FUND_RESEARCH_PORT` | `17081` | Go 基金投研服务端口 |
 
 股票服务使用：
 

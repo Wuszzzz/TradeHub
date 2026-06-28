@@ -1235,6 +1235,271 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/health:
+    get:
+      tags:
+        - fund-research
+      summary: 基金投研服务健康检查
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/summary:
+    get:
+      tags:
+        - fund-research
+      summary: 获取基金投研能力概览
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/funds/4433:
+    get:
+      tags:
+        - fund-research
+      summary: 4433 基金筛选
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 500
+        - name: enrich
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 30
+        - name: require_five_year
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/funds/filter:
+    get:
+      tags:
+        - fund-research
+      summary: 自定义基金严选
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 500
+        - name: result_limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+        - name: min_scale
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 2
+        - name: max_scale
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 50
+        - name: min_manager_years
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 5
+        - name: min_estab_years
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 5
+        - name: max_135_avg_stddev
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 25
+        - name: min_135_avg_sharp
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 1
+        - name: max_135_avg_retr
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 25
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/funds/check:
+    post:
+      tags:
+        - fund-research
+      summary: 基金检测
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                codes:
+                  type: array
+                  items:
+                    type: string
+                code:
+                  type: string
+              example:
+                codes:
+                  - "260104"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/funds/similarity:
+    post:
+      tags:
+        - fund-research
+      summary: 基金持仓相似度
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - codes
+              properties:
+                codes:
+                  type: array
+                  minItems: 2
+                  items:
+                    type: string
+              example:
+                codes:
+                  - "260104"
+                  - "163406"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/funds/by-stock:
+    get:
+      tags:
+        - fund-research
+      summary: 股票选基
+      parameters:
+        - name: keywords
+          in: query
+          required: true
+          schema:
+            type: string
+            example: 贵州茅台 宁德时代
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/managers:
+    get:
+      tags:
+        - fund-research
+      summary: 基金经理筛选
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+        - name: min_working_years
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 8
+        - name: min_yieldse
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 15
+        - name: max_current_fund_count
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 10
+        - name: min_scale
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 60
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
 components:
   schemas:
     ApiMeta:

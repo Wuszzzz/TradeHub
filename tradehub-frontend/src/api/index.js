@@ -79,6 +79,16 @@ export const fundsAPI = {
   tencentDetail: (symbol) => api.get(`/tencent-fund/${symbol}/`),
 };
 
+export const fundResearchAPI = {
+  summary: () => api.get('/fund-research/v1/summary'),
+  screen4433: (params) => api.get('/fund-research/v1/funds/4433', { params, timeout: 120000 }),
+  filter: (params) => api.get('/fund-research/v1/funds/filter', { params, timeout: 120000 }),
+  check: (codes) => api.post('/fund-research/v1/funds/check', { codes }, { timeout: 120000 }),
+  similarity: (codes) => api.post('/fund-research/v1/funds/similarity', { codes }, { timeout: 120000 }),
+  byStock: (keywords) => api.get('/fund-research/v1/funds/by-stock', { params: { keywords }, timeout: 120000 }),
+  managers: (params) => api.get('/fund-research/v1/managers', { params, timeout: 120000 }),
+};
+
 // 股票 / ETF 监控
 export const stockAPI = {
   overview: () => api.get('/stock/v1/overview'),

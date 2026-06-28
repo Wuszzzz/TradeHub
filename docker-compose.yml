@@ -71,6 +71,26 @@ services:
     networks:
       - tradehub
 
+  fund-research:
+    build:
+      context: ./tradehub-fund-research
+    container_name: tradehub-fund-research
+    restart: unless-stopped
+    environment:
+      FUND_RESEARCH_ADDR: ":18081"
+      POSTGRES_DB: ${FUND_DB:-fundval}
+      POSTGRES_USER: ${FUND_DB_USER:-fundval}
+      POSTGRES_PASSWORD: ${FUND_DB_PASSWORD:-tradehub_local_password}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+    ports:
+      - "${FUND_RESEARCH_PORT:-17081}:18081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tradehub
+
   fund-backend:
     build:
       context: ./tradehub-fund
@@ -247,6 +267,9 @@ services:
       VITE_FUND_API_BASE: ${VITE_FUND_API_BASE:-http://127.0.0.1:7001/api}
       VITE_STOCK_API_BASE: ${VITE_STOCK_API_BASE:-http://127.0.0.1:7002}
       VITE_MARKET_API_BASE: ${VITE_MARKET_API_BASE:-http://127.0.0.1:17080}
+      VITE_FUND_API_TARGET: ${VITE_FUND_API_TARGET:-http://fund-backend:8000}
+      VITE_STOCK_API_TARGET: ${VITE_STOCK_API_TARGET:-http://stock-api:8000}
+      VITE_FUND_RESEARCH_API_TARGET: ${VITE_FUND_RESEARCH_API_TARGET:-http://fund-research:18081}
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
     volumes:
@@ -254,6 +277,8 @@ services:
       - frontend_node_modules:/app/node_modules
     depends_on:
       fund-backend:
+        condition: service_started
+      fund-research:
         condition: service_started
       stock-api:
         condition: service_started

@@ -7,6 +7,7 @@ import {
   BellOutlined,
   DatabaseOutlined,
   FundOutlined,
+  ExperimentOutlined,
   GlobalOutlined,
   HistoryOutlined,
   LineChartOutlined,
@@ -43,6 +44,7 @@ const fundRouteKeys = new Set([
   '/dashboard/rankings',
   '/dashboard/fund-sectors',
   '/dashboard/fund-data',
+  '/dashboard/fund-research',
 ]);
 const stockRouteKeys = new Set([
   '/dashboard/stock',
@@ -123,6 +125,7 @@ const MainLayout = ({ children }) => {
         { key: 'compare', path: '/dashboard/compare', label: '对比', icon: <GlobalOutlined /> },
         { key: 'accounts', path: '/dashboard/accounts', label: '账户', icon: <AppstoreOutlined /> },
         { key: 'fund-data', path: '/dashboard/fund-data', label: '数据中心', icon: <DatabaseOutlined /> },
+        { key: 'fund-research', path: '/dashboard/fund-research', label: '投研工具', icon: <ExperimentOutlined /> },
       ],
     },
   ];

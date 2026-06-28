@@ -19,6 +19,7 @@ import MarketPage from './pages/MarketPage';
 import ProfilePage from './pages/ProfilePage';
 import FundDataCenterPage from './pages/FundDataCenterPage';
 import FundSectorsPage from './pages/FundSectorsPage';
+import FundResearchPage from './pages/FundResearchPage';
 import StockDashboardPage from './pages/StockDashboardPage';
 import StockWatchlistsPage from './pages/StockWatchlistsPage';
 import StockSearchPage from './pages/StockSearchPage';
@@ -219,6 +220,16 @@ function AppInner() {
                   <PrivateRoute>
                     <MainLayout>
                       <FundDataCenterPage />
+                    </MainLayout>
+                  </PrivateRoute>
+                }
+              />
+              <Route
+                path="/dashboard/fund-research"
+                element={
+                  <PrivateRoute>
+                    <MainLayout>
+                      <FundResearchPage />
                     </MainLayout>
                   </PrivateRoute>
                 }

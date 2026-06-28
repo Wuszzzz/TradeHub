@@ -12,6 +12,7 @@
 - fund-backend：Django + DRF
 - fund-worker：Celery worker
 - fund-beat：Celery beat 定时任务
+- fund-research：Go 基金投研服务
 - stock-api：Go 股票 API
 - stock-worker：Go 股票后台任务
 - market-api：行情源聚合网关
@@ -38,6 +39,7 @@
 | --- | --- | --- |
 | 5173 | frontend | 前端入口 |
 | 7001 | fund-backend | 基金 API |
+| 17081 | fund-research | Go 基金投研 API |
 | 7002 | stock-api | 股票 API |
 | 17080 | market-api | 行情 API |
 | 5433 | PostgreSQL | 如无需外部访问，生产建议不要暴露公网 |
@@ -76,6 +78,7 @@ cd TradeHub
 docker-compose.yml
 docker/init-scripts/postgres/init-db.sql
 tradehub-fund/
+tradehub-fund-research/
 tradehub-stock/
 tradehub-market-api/
 tradehub-frontend/
@@ -194,6 +197,7 @@ curl -X POST http://127.0.0.1:7001/api/auth/login \
 
 ```bash
 curl -sf http://127.0.0.1:7001/api/health/
+curl -sf http://127.0.0.1:17081/health
 curl -sf http://127.0.0.1:7002/healthz
 curl -sf http://127.0.0.1:17080/health
 curl -sf http://127.0.0.1:5173/
@@ -203,6 +207,7 @@ curl -sf http://127.0.0.1:5173/
 
 ```bash
 docker compose logs -f fund-backend
+docker compose logs -f fund-research
 docker compose logs -f fund-worker
 docker compose logs -f fund-beat
 docker compose logs -f stock-api
@@ -253,13 +258,14 @@ docker compose --env-file .env -p tradehub up -d --force-recreate --no-deps fund
 ```bash
 curl -I https://<trycloudflare-domain>/
 curl https://<trycloudflare-domain>/api/health/
+curl https://<trycloudflare-domain>/api/fund-research/v1/health
 curl https://<trycloudflare-domain>/api/stock/v1/system/health
 ```
 
-当前 dev 临时入口：
+当前 dev 临时入口以 `cloudflared tunnel` 实时输出为准，不写死到仓库文档。Quick Tunnel 域名会变化，不能作为长期入口。
 
 ```text
-https://christmas-taxation-lakes-farms.trycloudflare.com
+https://<当前 cloudflared 输出的 trycloudflare 域名>
 ```
 
 ### 8.2 Cloudflare Named Tunnel（固定域名）
@@ -422,6 +428,9 @@ docker compose up -d --force-recreate fund-backend fund-worker fund-beat stock-a
 VITE_FUND_API_BASE=http://127.0.0.1:7001/api
 VITE_STOCK_API_BASE=http://127.0.0.1:7002
 VITE_MARKET_API_BASE=http://127.0.0.1:17080
+VITE_FUND_API_TARGET=http://fund-backend:8000
+VITE_STOCK_API_TARGET=http://stock-api:8000
+VITE_FUND_RESEARCH_API_TARGET=http://fund-research:18081
 ```
 
 如果通过域名/Nginx 访问，需要改成对应公网域名或反向代理路径，并重新创建 frontend 容器。
