@@ -511,6 +511,21 @@ const FundDetailPage = () => {
     : storedItems.length > 0
       ? `数据库快照 ${storedSnapshot?.report_date || ''}`
       : '腾讯资料';
+  const activeRangeLabel = {
+    '1W': '近1周',
+    '1M': '近1月',
+    '3M': '近3月',
+    '6M': '近6月',
+    '1Y': '近1年',
+    ALL: '全部',
+    INTRADAY: '当日估值',
+  }[timeRange] || timeRange;
+  const latestNavPoint = navHistory[navHistory.length - 1];
+  const firstNavPoint = navHistory[0];
+  const trendReturn = firstNavPoint?.unit_nav && latestNavPoint?.unit_nav
+    ? ((Number(latestNavPoint.unit_nav) - Number(firstNavPoint.unit_nav)) / Number(firstNavPoint.unit_nav)) * 100
+    : null;
+  const trendReturnClass = Number(trendReturn) >= 0 ? 'up' : 'down';
 
   useEffect(() => {
     loadSectorMarkets(displayIndustries.map((item) => item.name));
@@ -700,35 +715,60 @@ const FundDetailPage = () => {
         </div>
       </Card>
 
-      <Card title="历史净值 / 估值走势" className="fund-panel fund-panel-span-2">
-        {timeRange === 'INTRADAY' ? (
-          intraday.length > 0 ? (
-            <ReactECharts
-              option={{
-                tooltip: { trigger: 'axis' },
-                xAxis: { type: 'category', data: intraday.map(s => new Date(s.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })) },
-                yAxis: { type: 'value', scale: true },
-                series: [{ type: 'line', data: intraday.map(s => parseFloat(s.estimate_nav)), smooth: true }],
-              }}
-              style={{ height: 360 }}
-            />
-          ) : <Empty description="暂无当日估值数据" />
-        ) : navHistory.length > 0 ? (
-          <ReactECharts option={chartOption} style={{ height: 420 }} />
-        ) : (
-          <Empty description="暂无历史数据" />
+      <Card
+        className="fund-panel fund-panel-span-2 fund-trend-card"
+        title={(
+          <div className="fund-trend-title">
+            <span>基金走势</span>
+            <strong>历史净值 / 估值走势</strong>
+            <small>{activeRangeLabel} · {timeRange === 'INTRADAY' ? intraday.length : navHistory.length} 个数据点</small>
+          </div>
         )}
-        <div style={{ marginTop: 12 }}>
-          <Space wrap>
+        extra={(
+          <div className={`fund-trend-return ${trendReturnClass}`}>
+            <span>区间收益</span>
+            <strong>{trendReturn != null && timeRange !== 'INTRADAY' ? `${trendReturn >= 0 ? '+' : ''}${trendReturn.toFixed(2)}%` : '--'}</strong>
+          </div>
+        )}
+      >
+        <div className="fund-trend-toolbar">
+          <div>
+            <span className="fund-trend-label">周期切换</span>
+            <Space wrap size={[6, 6]}>
             {['1W', '1M', '3M', '6M', '1Y', 'ALL'].map(range => (
-              <Button key={range} size="small" type={timeRange === range ? 'primary' : 'default'} onClick={() => { setTimeRange(range); loadNavHistory(range); }}>
+              <Button key={range} className="fund-range-pill" size="small" type={timeRange === range ? 'primary' : 'default'} onClick={() => { setTimeRange(range); loadNavHistory(range); }}>
                 {range === 'ALL' ? '全部' : range === '1W' ? '1周' : range}
               </Button>
             ))}
-            <Button size="small" type={timeRange === 'INTRADAY' ? 'primary' : 'default'} onClick={() => { setTimeRange('INTRADAY'); fundsAPI.estimateIntraday(code, preferredSource).then(res => setIntraday(res?.data?.snapshots || [])).catch(() => {}); }}>
+            <Button className="fund-range-pill" size="small" type={timeRange === 'INTRADAY' ? 'primary' : 'default'} onClick={() => { setTimeRange('INTRADAY'); fundsAPI.estimateIntraday(code, preferredSource).then(res => setIntraday(res?.data?.snapshots || [])).catch(() => {}); }}>
               当日估值
             </Button>
-          </Space>
+            </Space>
+          </div>
+          <div className="fund-trend-meta">
+            <span>最新净值</span>
+            <strong>{latestNavPoint?.unit_nav || fund.latest_nav || '-'}</strong>
+            <em>{latestNavPoint?.nav_date || fund.latest_nav_date || '-'}</em>
+          </div>
+        </div>
+        <div className="fund-trend-chart">
+          {timeRange === 'INTRADAY' ? (
+            intraday.length > 0 ? (
+              <ReactECharts
+                option={{
+                  tooltip: { trigger: 'axis' },
+                  xAxis: { type: 'category', data: intraday.map(s => new Date(s.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })) },
+                  yAxis: { type: 'value', scale: true },
+                  series: [{ type: 'line', data: intraday.map(s => parseFloat(s.estimate_nav)), smooth: true }],
+                }}
+                style={{ height: 360 }}
+              />
+            ) : <Empty description="暂无当日估值数据" />
+          ) : navHistory.length > 0 ? (
+            <ReactECharts option={chartOption} style={{ height: 420 }} />
+          ) : (
+            <Empty description="暂无历史数据" />
+          )}
         </div>
       </Card>
 
