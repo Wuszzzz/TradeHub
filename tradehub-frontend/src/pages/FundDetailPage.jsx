@@ -700,6 +700,38 @@ const FundDetailPage = () => {
         </div>
       </Card>
 
+      <Card title="历史净值 / 估值走势" className="fund-panel fund-panel-span-2">
+        {timeRange === 'INTRADAY' ? (
+          intraday.length > 0 ? (
+            <ReactECharts
+              option={{
+                tooltip: { trigger: 'axis' },
+                xAxis: { type: 'category', data: intraday.map(s => new Date(s.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })) },
+                yAxis: { type: 'value', scale: true },
+                series: [{ type: 'line', data: intraday.map(s => parseFloat(s.estimate_nav)), smooth: true }],
+              }}
+              style={{ height: 360 }}
+            />
+          ) : <Empty description="暂无当日估值数据" />
+        ) : navHistory.length > 0 ? (
+          <ReactECharts option={chartOption} style={{ height: 420 }} />
+        ) : (
+          <Empty description="暂无历史数据" />
+        )}
+        <div style={{ marginTop: 12 }}>
+          <Space wrap>
+            {['1W', '1M', '3M', '6M', '1Y', 'ALL'].map(range => (
+              <Button key={range} size="small" type={timeRange === range ? 'primary' : 'default'} onClick={() => { setTimeRange(range); loadNavHistory(range); }}>
+                {range === 'ALL' ? '全部' : range === '1W' ? '1周' : range}
+              </Button>
+            ))}
+            <Button size="small" type={timeRange === 'INTRADAY' ? 'primary' : 'default'} onClick={() => { setTimeRange('INTRADAY'); fundsAPI.estimateIntraday(code, preferredSource).then(res => setIntraday(res?.data?.snapshots || [])).catch(() => {}); }}>
+              当日估值
+            </Button>
+          </Space>
+        </div>
+      </Card>
+
       <div className="fund-detail-grid">
         <Card title="业绩表现及排名" className="fund-panel">
           <Table
@@ -937,38 +969,6 @@ const FundDetailPage = () => {
               { title: '增长率', dataIndex: 'jzzf', key: 'jzzf', width: 100, render: (v) => `${Number(v).toFixed(2)}%` },
             ]}
           />
-        </Card>
-
-        <Card title="历史净值 / 估值走势" className="fund-panel fund-panel-span-2">
-          {timeRange === 'INTRADAY' ? (
-            intraday.length > 0 ? (
-              <ReactECharts
-                option={{
-                  tooltip: { trigger: 'axis' },
-                  xAxis: { type: 'category', data: intraday.map(s => new Date(s.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })) },
-                  yAxis: { type: 'value', scale: true },
-                  series: [{ type: 'line', data: intraday.map(s => parseFloat(s.estimate_nav)), smooth: true }],
-                }}
-                style={{ height: 360 }}
-              />
-            ) : <Empty description="暂无当日估值数据" />
-          ) : navHistory.length > 0 ? (
-            <ReactECharts option={chartOption} style={{ height: 420 }} />
-          ) : (
-            <Empty description="暂无历史数据" />
-          )}
-          <div style={{ marginTop: 12 }}>
-            <Space wrap>
-              {['1W', '1M', '3M', '6M', '1Y', 'ALL'].map(range => (
-                <Button key={range} size="small" type={timeRange === range ? 'primary' : 'default'} onClick={() => { setTimeRange(range); loadNavHistory(range); }}>
-                  {range === 'ALL' ? '全部' : range === '1W' ? '1周' : range}
-                </Button>
-              ))}
-              <Button size="small" type={timeRange === 'INTRADAY' ? 'primary' : 'default'} onClick={() => { setTimeRange('INTRADAY'); fundsAPI.estimateIntraday(code, preferredSource).then(res => setIntraday(res?.data?.snapshots || [])).catch(() => {}); }}>
-                当日估值
-              </Button>
-            </Space>
-          </div>
         </Card>
 
         <Card
