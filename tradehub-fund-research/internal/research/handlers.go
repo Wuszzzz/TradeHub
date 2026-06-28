@@ -14,7 +14,7 @@ func (s *Server) Health(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) Summary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: map[string]any{
-		"features": []string{"4433", "filter", "check", "similarity", "by-stock", "managers"},
+		"features": []string{"4433", "filter", "check", "similarity", "by-stock", "managers", "related-sector", "tag-recommend", "sync"},
 		"source":   "eastmoney",
 		"language": "go",
 	}})
@@ -185,6 +185,123 @@ func (s *Server) Managers(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(results, func(i, j int) bool { return results[i].Manager.YearsAvgRepay > results[j].Manager.YearsAvgRepay })
 	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: map[string]any{"count": len(results), "items": results}})
+}
+
+func (s *Server) RelatedSectors(w http.ResponseWriter, r *http.Request) {
+	codes := splitFields(r.URL.Query().Get("codes"))
+	if len(codes) == 0 {
+		codes = splitFields(r.URL.Query().Get("code"))
+	}
+	if len(codes) == 0 {
+		errorJSON(w, http.StatusBadRequest, fmt.Errorf("codes required"))
+		return
+	}
+	rows, err := s.relatedSectorMap(r.Context(), codes)
+	if err != nil {
+		errorJSON(w, http.StatusBadGateway, err)
+		return
+	}
+	if boolQuery(r, "quote", false) {
+		secids := make([]string, 0, len(rows))
+		for _, row := range rows {
+			if row.SecID != "" {
+				secids = append(secids, row.SecID)
+			}
+		}
+		quotes, _ := s.em.SectorQuotes(r.Context(), secids)
+		for code, row := range rows {
+			if quote, ok := quotes[row.SecID]; ok {
+				q := quote
+				row.Quote = &q
+				rows[code] = row
+			}
+		}
+	}
+	items := make([]RelatedSector, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, row)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].FundCode < items[j].FundCode })
+	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: map[string]any{"count": len(items), "items": items}})
+}
+
+func (s *Server) SectorQuotes(w http.ResponseWriter, r *http.Request) {
+	secids := splitFields(r.URL.Query().Get("secids"))
+	if len(secids) == 0 {
+		labels := splitFields(r.URL.Query().Get("sectors"))
+		secidMap, err := s.sectorSecIDMap(r.Context(), labels)
+		if err != nil {
+			errorJSON(w, http.StatusBadGateway, err)
+			return
+		}
+		for _, secid := range secidMap {
+			secids = append(secids, secid)
+		}
+	}
+	if len(secids) == 0 {
+		errorJSON(w, http.StatusBadRequest, fmt.Errorf("secids or sectors required"))
+		return
+	}
+	quotes, err := s.em.SectorQuotes(r.Context(), secids)
+	if err != nil {
+		errorJSON(w, http.StatusBadGateway, err)
+		return
+	}
+	items := make([]SectorQuote, 0, len(quotes))
+	for _, quote := range quotes {
+		items = append(items, quote)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].SecID < items[j].SecID })
+	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: map[string]any{"count": len(items), "items": items}})
+}
+
+func (s *Server) RecommendTags(w http.ResponseWriter, r *http.Request) {
+	codes := splitFields(r.URL.Query().Get("codes"))
+	if len(codes) == 0 {
+		codes = splitFields(r.URL.Query().Get("code"))
+	}
+	if len(codes) == 0 {
+		errorJSON(w, http.StatusBadRequest, fmt.Errorf("codes required"))
+		return
+	}
+	items := make([]FundTag, 0)
+	for _, code := range codes {
+		tags, err := s.recommendTagsForFund(r.Context(), strings.TrimSpace(code))
+		if err != nil {
+			errorJSON(w, http.StatusBadGateway, err)
+			return
+		}
+		items = append(items, tags...)
+	}
+	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: map[string]any{"count": len(items), "items": items}})
+}
+
+func (s *Server) SyncStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: s.metadataSyncStatus(r.Context())})
+}
+
+func (s *Server) SyncSectorMap(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Items []RelatedSector `json:"items"`
+		Seed  bool            `json:"seed"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&payload)
+	rows := payload.Items
+	if payload.Seed {
+		for code, sector := range seedFundRelated {
+			rows = append(rows, RelatedSector{FundCode: code, Sector: sector, SecID: seedSectorSecIDs[sector]})
+		}
+	}
+	if len(rows) == 0 {
+		errorJSON(w, http.StatusBadRequest, fmt.Errorf("items required"))
+		return
+	}
+	count, err := s.syncSectorRows(r.Context(), rows)
+	if err != nil {
+		errorJSON(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: map[string]any{"synced": count}})
 }
 
 func filterParamsFromQuery(r *http.Request) FundFilterParams {

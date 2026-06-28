@@ -141,6 +141,37 @@ type ManagerResult struct {
 	BestFundIs4433 bool        `json:"best_fund_is_4433"`
 }
 
+type RelatedSector struct {
+	FundCode string       `json:"fund_code"`
+	Sector   string       `json:"sector"`
+	SecID    string       `json:"secid,omitempty"`
+	Quote    *SectorQuote `json:"quote,omitempty"`
+	Source   string       `json:"source"`
+}
+
+type SectorQuote struct {
+	SecID     string  `json:"secid"`
+	Code      string  `json:"code,omitempty"`
+	Name      string  `json:"name"`
+	ChangePct float64 `json:"change_pct"`
+}
+
+type FundTag struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Theme    string `json:"theme"`
+	Reason   string `json:"reason,omitempty"`
+	FundCode string `json:"fund_code,omitempty"`
+}
+
+type SyncStatus struct {
+	SeedRelatedCount int      `json:"seed_related_count"`
+	SeedSecIDCount   int      `json:"seed_secid_count"`
+	DBAvailable      bool     `json:"db_available"`
+	DBTables         []string `json:"db_tables"`
+	Mode             string   `json:"mode"`
+}
+
 type LocalRank struct {
 	Period   string
 	Growth   float64

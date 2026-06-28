@@ -88,3 +88,38 @@ func TestSimilarity(t *testing.T) {
 		t.Fatalf("unexpected same stocks: %#v", result[0].SameStocks)
 	}
 }
+
+func TestRecommendTagsFromSeedSector(t *testing.T) {
+	server := NewServer(nil, nil)
+	tags, err := server.recommendTagsForFund(t.Context(), "000055")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tags) == 0 {
+		t.Fatal("expected tags for seeded fund")
+	}
+	foundGlobalTech := false
+	for _, tag := range tags {
+		if tag.Name == "海外科技" {
+			foundGlobalTech = true
+		}
+	}
+	if !foundGlobalTech {
+		t.Fatalf("expected overseas tech tag, got %#v", tags)
+	}
+}
+
+func TestRelatedSectorMapUsesSeed(t *testing.T) {
+	server := NewServer(nil, nil)
+	rows, err := server.relatedSectorMap(t.Context(), []string{"260104", "missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, ok := rows["260104"]
+	if !ok {
+		t.Fatalf("expected seed sector row, got %#v", rows)
+	}
+	if row.Sector != "沪深300指数" || row.SecID != "1.000300" || row.Source != "seed" {
+		t.Fatalf("unexpected seed sector row: %#v", row)
+	}
+}

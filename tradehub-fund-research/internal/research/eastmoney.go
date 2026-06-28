@@ -371,6 +371,54 @@ func (c *EastMoneyClient) FundManagers(ctx context.Context, limit int) ([]Manage
 	return results, nil
 }
 
+func (c *EastMoneyClient) SectorQuotes(ctx context.Context, secids []string) (map[string]SectorQuote, error) {
+	secids = normalizeLabels(secids)
+	if len(secids) == 0 {
+		return map[string]SectorQuote{}, nil
+	}
+	out := map[string]SectorQuote{}
+	for i := 0; i < len(secids); i += 20 {
+		end := i + 20
+		if end > len(secids) {
+			end = len(secids)
+		}
+		params := url.Values{
+			"fields": {"f12,f13,f14,f3"},
+			"secids": {strings.Join(secids[i:end], ",")},
+		}
+		body, err := c.getText(ctx, "https://push2delay.eastmoney.com/api/qt/ulist.np/get?"+params.Encode(), "https://quote.eastmoney.com/")
+		if err != nil {
+			return out, err
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			return out, err
+		}
+		for _, raw := range sliceAt(mapAt(payload, "data"), "diff") {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			code := stringAt(item, "f12", "")
+			market := stringAt(item, "f13", "")
+			secid := ""
+			if market != "" && code != "" {
+				secid = market + "." + code
+			}
+			if secid == "" {
+				continue
+			}
+			out[secid] = SectorQuote{
+				SecID:     secid,
+				Code:      code,
+				Name:      stringAt(item, "f14", ""),
+				ChangePct: parseFloat(item["f3"]) / 100,
+			}
+		}
+	}
+	return out, nil
+}
+
 func (c *EastMoneyClient) getText(ctx context.Context, rawURL, referer string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {

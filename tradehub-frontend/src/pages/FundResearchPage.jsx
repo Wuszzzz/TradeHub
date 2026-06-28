@@ -69,6 +69,9 @@ const FundResearchPage = () => {
   const [similarityItems, setSimilarityItems] = useState([]);
   const [byStockItems, setByStockItems] = useState([]);
   const [managerItems, setManagerItems] = useState([]);
+  const [sectorItems, setSectorItems] = useState([]);
+  const [tagItems, setTagItems] = useState([]);
+  const [syncInfo, setSyncInfo] = useState(null);
 
   const run = async (fn, setter, successText) => {
     setLoading(true);
@@ -141,6 +144,47 @@ const FundResearchPage = () => {
     '基金经理筛选完成',
   );
 
+  const querySectorsAndTags = async (values) => {
+    const codes = (values.codes || '').split(/[\s,，]+/).filter(Boolean);
+    if (!codes.length) return;
+    setLoading(true);
+    setError('');
+    try {
+      const [sectorRes, tagRes, statusRes] = await Promise.all([
+        fundResearchAPI.relatedSectors(codes, true),
+        fundResearchAPI.recommendTags(codes),
+        fundResearchAPI.syncStatus(),
+      ]);
+      setSectorItems(unwrapItems(sectorRes.data?.data || {}));
+      setTagItems(unwrapItems(tagRes.data?.data || {}));
+      setSyncInfo(statusRes.data?.data || null);
+      message.success('板块和标签查询完成');
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message || '板块标签查询失败';
+      setError(msg);
+      message.error(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const syncSeedMap = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fundResearchAPI.syncSectorMap([], true);
+      message.success(`已同步 ${res.data?.data?.synced || 0} 条内置板块映射`);
+      const statusRes = await fundResearchAPI.syncStatus();
+      setSyncInfo(statusRes.data?.data || null);
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message || '同步板块映射失败';
+      setError(msg);
+      message.error(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="fund-research-page">
       <div className="fund-data-center-header">
@@ -154,7 +198,7 @@ const FundResearchPage = () => {
       {error && <Alert type="error" showIcon message="Go 投研服务不可用" description={error} style={{ marginBottom: 16 }} />}
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={12} lg={6}><Card><Statistic title="当前结果" value={items.length || checkItems.length || similarityItems.length || byStockItems.length || managerItems.length} prefix={<ExperimentOutlined />} /></Card></Col>
+        <Col xs={12} lg={6}><Card><Statistic title="当前结果" value={items.length || checkItems.length || similarityItems.length || byStockItems.length || managerItems.length || sectorItems.length} prefix={<ExperimentOutlined />} /></Card></Col>
         <Col xs={12} lg={6}><Card><Statistic title="数据源" value="EastMoney" prefix={<SearchOutlined />} /></Card></Col>
         <Col xs={12} lg={6}><Card><Statistic title="主体语言" value="Go" prefix={<LinkOutlined />} /></Card></Col>
         <Col xs={12} lg={6}><Card><Statistic title="上游方法" value="investool" prefix={<FilterOutlined />} /></Card></Col>
@@ -271,6 +315,72 @@ const FundResearchPage = () => {
                     { title: '基金名称', dataIndex: 'name' },
                     { title: '类型', dataIndex: 'type' },
                     { title: '匹配股票数', dataIndex: 'matched_stock_count' },
+                  ]}
+                />
+              </Space>
+            ),
+          },
+          {
+            key: 'sectors',
+            label: '板块标签',
+            children: (
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <Card>
+                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="吸收 real-time-fund 的工程经验"
+                      description="采用基金代码到关联板块、板块到东财 secid、批量行情和标签推荐的链路；TradeHub 用 Go 服务和 PostgreSQL 承接，不引入 Supabase/localStorage 作为主存储。"
+                    />
+                    <Form layout="inline" onFinish={querySectorsAndTags}>
+                      <Form.Item name="codes" rules={[{ required: true, message: '请输入基金代码' }]}>
+                        <Input placeholder="260104, 000055, 161725" style={{ width: 380 }} />
+                      </Form.Item>
+                      <Form.Item><Button type="primary" loading={loading} htmlType="submit">查询板块与标签</Button></Form.Item>
+                      <Form.Item><Button loading={loading} disabled={syncInfo && !syncInfo.db_available} onClick={syncSeedMap}>同步内置映射到库</Button></Form.Item>
+                    </Form>
+                    {syncInfo && (
+                      <Space wrap>
+                        <Tag color="blue">模式：{syncInfo.mode}</Tag>
+                        <Tag>内置基金映射：{syncInfo.seed_related_count}</Tag>
+                        <Tag>内置 secid：{syncInfo.seed_secid_count}</Tag>
+                        <Tag color={syncInfo.db_available ? 'green' : 'orange'}>{syncInfo.db_available ? 'PostgreSQL 可用' : '仅内置种子'}</Tag>
+                      </Space>
+                    )}
+                  </Space>
+                </Card>
+                <Table
+                  rowKey="fund_code"
+                  title={() => '关联板块与实时涨跌'}
+                  dataSource={sectorItems}
+                  loading={loading}
+                  columns={[
+                    { title: '基金代码', dataIndex: 'fund_code', width: 100 },
+                    { title: '关联板块', dataIndex: 'sector' },
+                    { title: 'SecID', dataIndex: 'secid' },
+                    { title: '行情名称', render: (_, row) => row.quote?.name || '-' },
+                    {
+                      title: '板块涨跌',
+                      render: (_, row) => {
+                        const value = row.quote?.change_pct;
+                        if (value === null || value === undefined) return '-';
+                        return <Text type={value >= 0 ? 'danger' : 'success'}>{pct(value)}</Text>;
+                      },
+                    },
+                    { title: '来源', dataIndex: 'source', render: (v) => <Tag color={v === 'db' ? 'green' : 'blue'}>{v}</Tag> },
+                  ]}
+                />
+                <Table
+                  rowKey={(row) => `${row.fund_code}-${row.id}`}
+                  title={() => '推荐标签'}
+                  dataSource={tagItems}
+                  loading={loading}
+                  columns={[
+                    { title: '基金代码', dataIndex: 'fund_code', width: 100 },
+                    { title: '标签', dataIndex: 'name', render: (name, row) => <Tag color={row.theme === 'sector' ? 'blue' : 'geekblue'}>{name}</Tag> },
+                    { title: '主题', dataIndex: 'theme' },
+                    { title: '原因', dataIndex: 'reason' },
                   ]}
                 />
               </Space>

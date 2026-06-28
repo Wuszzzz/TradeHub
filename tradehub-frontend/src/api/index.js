@@ -87,6 +87,11 @@ export const fundResearchAPI = {
   similarity: (codes) => api.post('/fund-research/v1/funds/similarity', { codes }, { timeout: 120000 }),
   byStock: (keywords) => api.get('/fund-research/v1/funds/by-stock', { params: { keywords }, timeout: 120000 }),
   managers: (params) => api.get('/fund-research/v1/managers', { params, timeout: 120000 }),
+  relatedSectors: (codes, quote = true) => api.get('/fund-research/v1/sectors/related', { params: { codes: codes.join(','), quote: quote ? 1 : 0 }, timeout: 120000 }),
+  sectorQuotes: (secids) => api.get('/fund-research/v1/sectors/quotes', { params: { secids: secids.join(',') }, timeout: 120000 }),
+  recommendTags: (codes) => api.get('/fund-research/v1/tags/recommend', { params: { codes: codes.join(',') }, timeout: 120000 }),
+  syncStatus: () => api.get('/fund-research/v1/sync/status'),
+  syncSectorMap: (items, seed = false) => api.post('/fund-research/v1/sync/sector-map', { items, seed }, { timeout: 120000 }),
 };
 
 // 股票 / ETF 监控

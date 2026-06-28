@@ -11,6 +11,9 @@ This service recreates the fund-focused workflows inspired by
 - fund holding similarity
 - stock-to-fund lookup
 - fund manager screening
+- related sector mapping and sector quote lookup
+- fund tag recommendation based on related sectors
+- sector metadata sync into PostgreSQL
 
 The implementation is not a vendored copy of the upstream Go web app. It is a
 TradeHub-native Go service that calls EastMoney endpoints and reads the existing
@@ -30,6 +33,11 @@ Upstream attribution: see `THIRD_PARTY_NOTICES.md`.
 | `POST` | `/api/fund-research/v1/funds/similarity` | fund holding similarity |
 | `GET` | `/api/fund-research/v1/funds/by-stock` | stock-to-fund lookup |
 | `GET` | `/api/fund-research/v1/managers` | fund manager screening |
+| `GET` | `/api/fund-research/v1/sectors/related` | fund-to-related-sector lookup |
+| `GET` | `/api/fund-research/v1/sectors/quotes` | EastMoney sector/index quotes |
+| `GET` | `/api/fund-research/v1/tags/recommend` | recommended fund tags |
+| `GET` | `/api/fund-research/v1/sync/status` | metadata sync status |
+| `POST` | `/api/fund-research/v1/sync/sector-map` | sync sector mappings into PostgreSQL |
 
 ## Local Run
 
@@ -58,3 +66,19 @@ TradeHub APIs as follows:
 | 股票选基 | `GET /api/fund-research/v1/funds/by-stock` |
 | 股票持仓相似度检测 | `POST /api/fund-research/v1/funds/similarity` |
 | 基金经理筛选 | `GET /api/fund-research/v1/managers` |
+
+## real-time-fund Engineering Ideas Adopted
+
+`hzm0321/real-time-fund` uses a practical metadata chain:
+
+1. fund code -> related sector name
+2. related sector name -> EastMoney `secid`
+3. batched sector quote lookup
+4. recommended tags derived from sector/topic metadata
+5. sync state separated from live quote fetching
+
+TradeHub adopts that design shape in Go, but does not vendor the upstream
+Next.js/Supabase implementation. The service keeps a small built-in seed map
+for common indices and sectors, can optionally persist mappings into
+PostgreSQL, and exposes APIs that the TradeHub fund workspace can call from the
+same `/api/fund-research/v1/*` namespace.

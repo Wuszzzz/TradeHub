@@ -1500,6 +1500,123 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/sectors/related:
+    get:
+      tags:
+        - fund-research
+      summary: 查询基金关联板块
+      parameters:
+        - name: codes
+          in: query
+          required: true
+          schema:
+            type: string
+            example: 260104,000055,161725
+        - name: quote
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/sectors/quotes:
+    get:
+      tags:
+        - fund-research
+      summary: 查询板块或指数实时涨跌
+      parameters:
+        - name: secids
+          in: query
+          required: false
+          schema:
+            type: string
+            example: 1.000300,100.NDX
+        - name: sectors
+          in: query
+          required: false
+          schema:
+            type: string
+            example: 沪深300指数,纳斯达克100指数
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/tags/recommend:
+    get:
+      tags:
+        - fund-research
+      summary: 基于关联板块推荐基金标签
+      parameters:
+        - name: codes
+          in: query
+          required: true
+          schema:
+            type: string
+            example: 260104,000055
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/sync/status:
+    get:
+      tags:
+        - fund-research
+      summary: 基金投研元数据同步状态
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+  /api/fund-research/v1/sync/sector-map:
+    post:
+      tags:
+        - fund-research
+      summary: 同步基金关联板块映射到 PostgreSQL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                seed:
+                  type: boolean
+                  default: false
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      fund_code:
+                        type: string
+                      sector:
+                        type: string
+                      secid:
+                        type: string
+              example:
+                seed: true
+                items: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
 components:
   schemas:
     ApiMeta:
