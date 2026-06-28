@@ -193,7 +193,101 @@ curl -X POST http://127.0.0.1:7001/api/auth/login \
 
 当前初始化密码只用于首次交付，登录后必须立即修改。
 
-## 7. 健康检查
+## 7. 首次部署数据初始化
+
+首次部署完成后，必须回补至少 1 年基金历史净值。否则 Go 基金评估无法稳定计算最大回撤、年化波动率和夏普率；这些风险指标至少需要约 60 个有效净值点。
+
+### 7.1 回补 1 年基金净值
+
+推荐先小批量验证：
+
+```bash
+docker compose exec fund-backend python manage.py sync_nav_history \
+  --days 365 \
+  --limit 20 \
+  --batch-size 20
+```
+
+确认无明显数据源错误后，后台跑全量 1 年回补：
+
+```bash
+mkdir -p logs
+nohup docker compose exec -T fund-backend python -u manage.py sync_nav_history \
+  --days 365 \
+  --batch-size 200 \
+  > logs/sync_nav_history_1y.log 2>&1 &
+```
+
+查看进度：
+
+```bash
+tail -f logs/sync_nav_history_1y.log
+```
+
+如果服务器资源较小，建议分片执行，避免一次跑完 2 万多只基金：
+
+```bash
+docker compose exec -T fund-backend python manage.py sync_nav_history \
+  --days 365 \
+  --offset 0 \
+  --limit 3000 \
+  --batch-size 100
+
+docker compose exec -T fund-backend python manage.py sync_nav_history \
+  --days 365 \
+  --offset 3000 \
+  --limit 3000 \
+  --batch-size 100
+```
+
+### 7.2 生成 Go 基金评估快照
+
+净值回补完成后，由 Go 投研服务批量计算基金评估指标并写入 `fund_evaluation_snapshot`：
+
+```bash
+curl -X POST http://127.0.0.1:17081/api/fund-research/v1/sync/evaluations \
+  -H 'Content-Type: application/json' \
+  -d '{"limit":5000,"window_days":370}'
+```
+
+也可以在前端 `/dashboard/rankings` 点击“同步Go评估”，对当前候选基金生成快照。
+
+### 7.3 验证数据初始化结果
+
+检查历史净值覆盖：
+
+```bash
+docker compose exec postgres psql -U postgres -d fundval -c "
+select
+  count(*) as nav_rows,
+  count(distinct fund_id) as fund_count,
+  min(nav_date) as min_date,
+  max(nav_date) as max_date
+from fund_nav_history
+where nav_date >= current_date - interval '365 days';
+"
+```
+
+检查 Go 评估快照：
+
+```bash
+docker compose exec postgres psql -U postgres -d fundval -c "
+select
+  count(*) as eval_count,
+  min(nav_count) as min_nav,
+  max(nav_count) as max_nav
+from fund_evaluation_snapshot
+where source = 'go_fund_research';
+"
+```
+
+检查排行接口已带评估字段：
+
+```bash
+curl -s 'http://127.0.0.1:7001/api/fund-performance-ranks/?rank_type=performance&period=day&page_size=5'
+```
+
+## 8. 健康检查
 
 ```bash
 curl -sf http://127.0.0.1:7001/api/health/
@@ -216,11 +310,11 @@ docker compose logs -f market-api
 docker compose logs -f frontend
 ```
 
-## 8. 4G 网关公网访问方案
+## 9. 4G 网关公网访问方案
 
 如果服务器在 4G 网关后面，公网 IP 会变化，而且可能存在 CGNAT。不要依赖普通 A 记录加端口映射作为主要入口。推荐使用 Cloudflare Tunnel 或 frp 这类反向隧道。
 
-### 8.1 Cloudflare Quick Tunnel（临时测试）
+### 9.1 Cloudflare Quick Tunnel（临时测试）
 
 Quick Tunnel 不需要 Cloudflare 账号和域名，适合临时验证，但地址会变化，没有可用性保证。
 
