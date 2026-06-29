@@ -177,6 +177,8 @@ class Command(BaseCommand):
                     fund.latest_nav = data['nav']
                     fund.latest_nav_date = new_date
                     fund.save(update_fields=['latest_nav', 'latest_nav_date', 'updated_at'])
+                    from api.services.daily_fact import upsert_daily_fact_from_latest_nav
+                    upsert_daily_fact_from_latest_nav(fund, source=data.get('_source') or 'update_nav')
                     success_count += 1
                 else:
                     skip_count += 1

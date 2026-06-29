@@ -11,7 +11,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from django.shortcuts import get_object_or_404
 from django.db import models
-from django.db.models import Q, Sum
+from django.db.models import Q, Sum, F, OuterRef, Subquery, DecimalField, ExpressionWrapper
+from django.utils.dateparse import parse_date
 from django.utils import timezone
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -924,6 +925,8 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
                             fund.latest_nav = data.get('nav')
                             fund.latest_nav_date = new_date
                             fund.save(update_fields=['latest_nav', 'latest_nav_date', 'updated_at'])
+                            from .services.daily_fact import upsert_daily_fact_from_latest_nav
+                            upsert_daily_fact_from_latest_nav(fund, source=data.get('_source') or 'batch_update_nav')
 
                         results[code] = {
                             'fund_code': code,
@@ -1975,6 +1978,89 @@ class FundPerformanceRankSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [AllowAny]
     pagination_class = BoundedPageNumberPagination
 
+    def _range_queryset(self, start_date, end_date):
+        queryset = Fund.objects.all()
+        fund_code = self.request.query_params.get('fund_code')
+        fund_type = self.request.query_params.get('fund_type') or self.request.query_params.get('category')
+        industry = self.request.query_params.get('industry')
+        min_size = self.request.query_params.get('min_size')
+        max_size = self.request.query_params.get('max_size')
+
+        if fund_code:
+            queryset = queryset.filter(fund_code=fund_code)
+        queryset = apply_fund_ranking_filters(queryset, fund_type, min_size, max_size, industry)
+
+        start_navs = FundNavHistory.objects.filter(
+            fund=OuterRef('pk'),
+            nav_date__gte=start_date,
+            nav_date__lte=end_date,
+        ).order_by('nav_date')
+        end_navs = FundNavHistory.objects.filter(
+            fund=OuterRef('pk'),
+            nav_date__gte=start_date,
+            nav_date__lte=end_date,
+        ).order_by('-nav_date')
+
+        queryset = queryset.annotate(
+            range_start_nav=Subquery(start_navs.values('unit_nav')[:1]),
+            range_start_date=Subquery(start_navs.values('nav_date')[:1]),
+            range_end_nav=Subquery(end_navs.values('unit_nav')[:1]),
+            range_end_date=Subquery(end_navs.values('nav_date')[:1]),
+        ).filter(
+            range_start_nav__isnull=False,
+            range_end_nav__isnull=False,
+            range_start_nav__gt=0,
+        ).annotate(
+            range_growth=ExpressionWrapper(
+                (F('range_end_nav') - F('range_start_nav')) * Decimal('100.0') / F('range_start_nav'),
+                output_field=DecimalField(max_digits=12, decimal_places=4),
+            )
+        )
+        return queryset.order_by('-range_growth', 'fund_code')
+
+    def _range_list(self, request, start_date, end_date):
+        from .services.fund_metrics import metrics_for_funds
+
+        queryset = self._range_queryset(start_date, end_date)
+        page = self.paginate_queryset(queryset)
+        objects = list(page) if page is not None else list(queryset)
+        metrics = metrics_for_funds([obj.id for obj in objects])
+        total = queryset.count()
+        offset = 0
+        if page is not None and hasattr(self.paginator, 'page'):
+            offset = (self.paginator.page.number - 1) * self.paginator.get_page_size(request)
+        rows = []
+        for index, fund in enumerate(objects, start=offset + 1):
+            metric = metrics.get(fund.id) or {}
+            rows.append({
+                'id': str(fund.id),
+                'fund': str(fund.id),
+                'fund_code': fund.fund_code,
+                'fund_name': fund.fund_name,
+                'fund_type': fund.fund_type,
+                'fund_size': fund.fund_size,
+                'fund_size_text': fund.fund_size_text,
+                'rank_type': 'range',
+                'rank_date': str(fund.range_end_date),
+                'period': 'range',
+                'growth': fund.range_growth,
+                'rank': index,
+                'total': total,
+                'quartile': None,
+                'source': 'fund_nav_history',
+                'range_start_date': fund.range_start_date,
+                'range_end_date': fund.range_end_date,
+                'range_start_nav': fund.range_start_nav,
+                'range_end_nav': fund.range_end_nav,
+                'max_drawdown': metric.get('max_drawdown'),
+                'volatility': metric.get('volatility'),
+                'sharpe': metric.get('sharpe'),
+                'evaluation': metric.get('evaluation'),
+            })
+        if page is not None:
+            return self.get_paginated_response(rows)
+        return Response(rows)
+
     def get_queryset(self):
         queryset = FundPerformanceRankSnapshot.objects.select_related('fund')
         fund_code = self.request.query_params.get('fund_code')
@@ -2003,6 +2089,13 @@ class FundPerformanceRankSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
 
     def list(self, request, *args, **kwargs):
         from .services.fund_metrics import metrics_for_funds
+
+        start_date = parse_date(request.query_params.get('start_date') or '')
+        end_date = parse_date(request.query_params.get('end_date') or '')
+        if start_date and end_date:
+            if start_date > end_date:
+                return Response({'error': 'start_date 不能晚于 end_date'}, status=status.HTTP_400_BAD_REQUEST)
+            return self._range_list(request, start_date, end_date)
 
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)

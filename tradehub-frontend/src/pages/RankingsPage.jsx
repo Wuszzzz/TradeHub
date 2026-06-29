@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
-import { Alert, Button, Card, Col, DatePicker, Drawer, Row, Statistic, Tabs, Table, Select, Spin, Empty, Tag, Space, Input, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, DatePicker, Drawer, Row, Statistic, Tabs, Table, Select, Spin, Empty, Tag, Space, Input, Typography, message, Switch } from 'antd';
 import { AimOutlined, FireOutlined, FundOutlined, PlusOutlined, StarOutlined, SyncOutlined, TrophyOutlined } from '@ant-design/icons';
 import { fundResearchAPI, fundsAPI, watchlistsAPI } from '../api';
 
 const { Text } = Typography;
+const { RangePicker } = DatePicker;
 const STORAGE_KEY = 'tradehub.rankings.filters.v2';
 
 const CATEGORIES = [
@@ -61,6 +62,8 @@ const RankingsPage = () => {
   const [type, setType] = useState(cachedFilters.type || 'gain');
   const [period, setPeriod] = useState(cachedFilters.period || 'day');
   const [rankDate, setRankDate] = useState(cachedFilters.rankDate || '');
+  const [rangeMode, setRangeMode] = useState(Boolean(cachedFilters.rangeMode));
+  const [rankDateRange, setRankDateRange] = useState(cachedFilters.rankDateRange || []);
   const [category, setCategory] = useState(cachedFilters.category || '');
   const [sizeRange, setSizeRange] = useState(cachedFilters.sizeRange || '');
   const [industry, setIndustry] = useState(cachedFilters.industry || '');
@@ -79,7 +82,8 @@ const RankingsPage = () => {
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const requestIdRef = useRef(0);
   const isStoredRanking = type === 'performance' || type === 'gain' || type === 'popular';
-  const displayData = isStoredRanking ? data.filter((item) => !item.period || item.period === period) : data;
+  const isRangeRanking = isStoredRanking && rangeMode && rankDateRange?.[0] && rankDateRange?.[1];
+  const displayData = isStoredRanking && !isRangeRanking ? data.filter((item) => !item.period || item.period === period) : data;
   const enrichedData = displayData.map((item) => ({ ...item, research: researchMap[item.fund_code] || {} }));
 
   const loadSectorsForRows = async (rows, requestId) => {
@@ -115,12 +119,14 @@ const RankingsPage = () => {
       type,
       period,
       rankDate,
+      rangeMode,
+      rankDateRange,
       category,
       sizeRange,
       industry,
       watchlistId: selectedWatchlistId,
     }));
-  }, [type, period, rankDate, category, sizeRange, industry, selectedWatchlistId]);
+  }, [type, period, rankDate, rangeMode, rankDateRange, category, sizeRange, industry, selectedWatchlistId]);
 
   useEffect(() => {
     watchlistsAPI.list()
@@ -144,6 +150,8 @@ const RankingsPage = () => {
         const { data: res } = await fundsAPI.performanceRanks({
           rank_type: type === 'popular' ? 'popular' : 'performance',
           period,
+          start_date: isRangeRanking ? rankDateRange[0] : undefined,
+          end_date: isRangeRanking ? rankDateRange[1] : undefined,
           rank_date: period === 'day' && rankDate ? rankDate : undefined,
           category,
           min_size: minSize || undefined,
@@ -156,8 +164,10 @@ const RankingsPage = () => {
         setData(rows);
         setMeta({
           rankDate: rows[0]?.rank_date || '',
-          period: rows[0]?.period || period,
+          period: isRangeRanking ? 'range' : (rows[0]?.period || period),
           source: rows[0]?.source || '',
+          rangeStartDate: rows[0]?.range_start_date || rankDateRange?.[0] || '',
+          rangeEndDate: rows[0]?.range_end_date || rankDateRange?.[1] || '',
         });
         loadSectorsForRows(rows, requestId);
         enrichResearch(rows, requestId);
@@ -217,7 +227,7 @@ const RankingsPage = () => {
     }
   };
 
-  useEffect(() => { loadData(); }, [type, period, rankDate, category, sizeRange, industry]);
+  useEffect(() => { loadData(); }, [type, period, rankDate, rangeMode, rankDateRange, category, sizeRange, industry]);
 
   const loadSectorAnalysis = async () => {
     const fundCodes = displayData.slice(0, 80).map((item) => item.fund_code).filter(Boolean);
@@ -305,15 +315,19 @@ const RankingsPage = () => {
         dataIndex: 'period',
         key: 'period',
         width: 100,
-        render: v => <Tag color="blue">{PERIODS.find(item => item.value === v)?.label || v}</Tag>,
+        render: v => <Tag color="blue">{v === 'range' ? '多日' : (PERIODS.find(item => item.value === v)?.label || v)}</Tag>,
       },
       {
-        title: '涨幅',
+        title: isRangeRanking ? '区间涨幅' : '涨幅',
         dataIndex: 'growth',
         key: 'growth',
         width: 100,
         render: v => <span style={{ color: parseFloat(v) >= 0 ? '#cf1322' : '#3f8600' }}>{v != null ? `${parseFloat(v) >= 0 ? '+' : ''}${parseFloat(v).toFixed(2)}%` : '-'}</span>,
       },
+    ] : []),
+    ...(isRangeRanking ? [
+      { title: '起始日', dataIndex: 'range_start_date', key: 'range_start_date', width: 110 },
+      { title: '结束日', dataIndex: 'range_end_date', key: 'range_end_date', width: 110 },
     ] : []),
     {
       title: '基金规模',
@@ -429,9 +443,25 @@ const RankingsPage = () => {
             style={{ width: 120 }}
             onChange={setPeriod}
             options={PERIODS}
+            disabled={isRangeRanking}
           />
         )}
-        {isStoredRanking && period === 'day' && (
+        {isStoredRanking && (
+          <Switch
+            checked={rangeMode}
+            checkedChildren="多日"
+            unCheckedChildren="单日"
+            onChange={setRangeMode}
+          />
+        )}
+        {isStoredRanking && rangeMode && (
+          <RangePicker
+            value={rankDateRange?.length === 2 ? [dayjs(rankDateRange[0]), dayjs(rankDateRange[1])] : null}
+            placeholder={['开始日', '结束日']}
+            onChange={(_, values) => setRankDateRange(values?.[0] && values?.[1] ? values : [])}
+          />
+        )}
+        {isStoredRanking && !rangeMode && period === 'day' && (
           <DatePicker
             value={rankDate ? dayjs(rankDate) : null}
             placeholder="排行日"
@@ -476,7 +506,9 @@ const RankingsPage = () => {
           type="info"
           style={{ marginBottom: 12 }}
           message="排行已合并基金评估与选择"
-          description={`数据优先来自 PostgreSQL 落库排行和净值历史，回撤/波动/夏普/评估分由 Go 投研服务批量计算写回数据库；板块和标签也由 Go 投研服务增强。当前周期：${PERIODS.find(item => item.value === period)?.label || period} / 排行日：${meta.rankDate || rankDate || '最新落库'} / 首行周期：${displayData[0]?.period || data[0]?.period || '-'}`}
+          description={isRangeRanking
+            ? `当前为多日区间统计，基于 PostgreSQL 的 fund_nav_history 起止净值计算区间涨幅并排序。区间：${meta.rangeStartDate || rankDateRange[0]} 至 ${meta.rangeEndDate || rankDateRange[1]} / 数据源：${meta.source || 'fund_nav_history'}`
+            : `数据优先来自 PostgreSQL 落库排行和净值历史，回撤/波动/夏普/评估分由 Go 投研服务批量计算写回数据库；板块和标签也由 Go 投研服务增强。当前周期：${PERIODS.find(item => item.value === period)?.label || period} / 排行日：${meta.rankDate || rankDate || '最新落库'} / 首行周期：${displayData[0]?.period || data[0]?.period || '-'}`}
         />
       )}
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
@@ -525,8 +557,9 @@ const RankingsPage = () => {
             <Text>类型：{detailRecord.fund_type || '-'}</Text>
             <Text>规模：{detailRecord.fund_size_text || (detailRecord.fund_size ? `${Number(detailRecord.fund_size).toFixed(2)}亿` : '-')}</Text>
             <Text>排行日：{detailRecord.rank_date || '-'}</Text>
-            <Text>周期：{PERIODS.find(item => item.value === detailRecord.period)?.label || detailRecord.period || '-'}</Text>
-            <Text>涨幅：{detailRecord.growth != null ? `${Number(detailRecord.growth).toFixed(2)}%` : '-'}</Text>
+            <Text>周期：{detailRecord.period === 'range' ? '多日区间' : (PERIODS.find(item => item.value === detailRecord.period)?.label || detailRecord.period || '-')}</Text>
+            {detailRecord.period === 'range' && <Text>区间：{detailRecord.range_start_date || '-'} 至 {detailRecord.range_end_date || '-'}</Text>}
+            <Text>{detailRecord.period === 'range' ? '区间涨幅' : '涨幅'}：{detailRecord.growth != null ? `${Number(detailRecord.growth).toFixed(2)}%` : '-'}</Text>
             <Row gutter={[8, 8]}>
               <Col span={8}><Card size="small"><Statistic title="最大回撤" value={detailRecord.max_drawdown ?? '-'} suffix={detailRecord.max_drawdown ? '%' : ''} /></Card></Col>
               <Col span={8}><Card size="small"><Statistic title="波动率" value={detailRecord.volatility ?? '-'} suffix={detailRecord.volatility ? '%' : ''} /></Card></Col>

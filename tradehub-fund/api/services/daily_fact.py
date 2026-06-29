@@ -32,6 +32,20 @@ def upsert_daily_fact_from_estimate_accuracy(record: EstimateAccuracy):
     return fact
 
 
+def upsert_daily_fact_from_latest_nav(fund, source='latest_nav'):
+    if not fund.latest_nav or not fund.latest_nav_date:
+        return None
+    fact, _ = FundDailyFact.objects.update_or_create(
+        fund=fund,
+        trade_date=fund.latest_nav_date,
+        defaults={
+            'unit_nav': fund.latest_nav,
+            'source': source,
+        },
+    )
+    return fact
+
+
 def backfill_daily_facts(fund_codes=None, limit=None):
     funds = Fund.objects.all().order_by('fund_code')
     if fund_codes:
