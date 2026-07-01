@@ -9,6 +9,7 @@ from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 import json
+import os
 import requests
 import re
 
@@ -120,8 +121,9 @@ def _normalize_market_symbol(raw_code):
 
 
 def _market_api_json(path, params=None):
+    market_api_base = os.environ.get('MARKET_API_URL', 'http://market-api:18080').rstrip('/')
     resp = requests.get(
-        f'http://127.0.0.1:18080{path}',
+        f'{market_api_base}{path}',
         params=params or {},
         headers={'User-Agent': 'Mozilla/5.0'},
         timeout=15,
@@ -492,7 +494,16 @@ def fund_market_kline(request, fund_code):
         except Exception as e:
             last_error = str(e)
 
-    return Response({'error': last_error or '未获取到 K 线数据'}, status=502)
+    return Response({
+        'symbol': market_symbol,
+        'source': preferred_source,
+        'period': period,
+        'adjust': adjust,
+        'rows': [],
+        'meta': {
+            'error': last_error or '未获取到 K 线数据',
+        },
+    })
 
 
 def _replace_placeholders(template: str, context_data: dict) -> str:

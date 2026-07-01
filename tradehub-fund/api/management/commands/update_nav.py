@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from django.core.management.base import BaseCommand
 from api.sources import SourceRegistry
 from api.models import Fund
+from api.services.fund_returns import recalculate_fund_returns
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,7 @@ class Command(BaseCommand):
                     fund.save(update_fields=['latest_nav', 'latest_nav_date', 'updated_at'])
                     from api.services.daily_fact import upsert_daily_fact_from_latest_nav
                     upsert_daily_fact_from_latest_nav(fund, source=data.get('_source') or 'update_nav')
+                    recalculate_fund_returns(fund)
                     success_count += 1
                 else:
                     skip_count += 1

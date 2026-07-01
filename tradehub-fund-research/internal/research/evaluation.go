@@ -30,6 +30,8 @@ type FundEvaluation struct {
 	MaxDrawdown    *float64   `json:"max_drawdown,omitempty"`
 	Volatility     *float64   `json:"volatility,omitempty"`
 	Sharpe         *float64   `json:"sharpe,omitempty"`
+	Top5Ratio      *float64   `json:"top5_holding_ratio,omitempty"`
+	Top10Ratio     *float64   `json:"top10_holding_ratio,omitempty"`
 	Score          int        `json:"score"`
 	Level          string     `json:"level"`
 	Reasons        []string   `json:"reasons"`
@@ -50,6 +52,11 @@ type localRankRow struct {
 	Growth *float64
 	Rank   int
 	Total  int
+}
+
+type holdingRatioRow struct {
+	Top5  *float64
+	Top10 *float64
 }
 
 func (s *Server) syncEvaluationSnapshots(ctx context.Context, limit, windowDays int, codes []string) ([]FundEvaluation, error) {
@@ -81,10 +88,18 @@ func (s *Server) syncEvaluationSnapshots(ctx context.Context, limit, windowDays 
 	if err != nil {
 		return nil, err
 	}
+	holdingRatios, err := s.latestHoldingRatios(ctx, fundIDs)
+	if err != nil {
+		return nil, err
+	}
 	today := dateOnly(time.Now())
 	items := make([]FundEvaluation, 0, len(funds))
 	for _, fund := range funds {
 		eval := calculateFundEvaluation(fund, navs[fund.ID], ranks[fund.ID], today, windowDays)
+		if ratios, ok := holdingRatios[fund.ID]; ok {
+			eval.Top5Ratio = ratios.Top5
+			eval.Top10Ratio = ratios.Top10
+		}
 		if eval.NavCount == 0 {
 			continue
 		}
@@ -194,6 +209,60 @@ func (s *Server) latestLocalRanks(ctx context.Context, fundIDs []string) (map[st
 		}
 		if total.Valid {
 			row.Total = int(total.Int64)
+		}
+		result[fundID] = row
+	}
+	return result, rows.Err()
+}
+
+func (s *Server) latestHoldingRatios(ctx context.Context, fundIDs []string) (map[string]holdingRatioRow, error) {
+	result := map[string]holdingRatioRow{}
+	if len(fundIDs) == 0 {
+		return result, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		with latest_snapshot as (
+			select distinct on (fund_id) id, fund_id
+			from fund_holding_snapshot
+			where fund_id::text = any($1)
+			order by fund_id, report_date desc, updated_at desc
+		),
+		ranked_items as (
+			select
+				s.fund_id::text as fund_id,
+				coalesce(i.weight::float8, 0) as weight,
+				row_number() over (partition by s.fund_id order by i.sort_order asc, i.weight desc nulls last, i.asset_code) as rn
+			from latest_snapshot s
+			join fund_holding_item i on i.snapshot_id = s.id
+			where i.holding_type = 'stock' and i.weight is not null
+		)
+		select
+			fund_id,
+			sum(case when rn <= 5 then weight else 0 end) as top5_ratio,
+			sum(case when rn <= 10 then weight else 0 end) as top10_ratio
+		from ranked_items
+		group by fund_id
+	`, pq.Array(fundIDs))
+	if err != nil {
+		if isUndefinedTable(err) {
+			return result, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var fundID string
+		var top5 sql.NullFloat64
+		var top10 sql.NullFloat64
+		if err := rows.Scan(&fundID, &top5, &top10); err != nil {
+			return nil, err
+		}
+		row := holdingRatioRow{}
+		if top5.Valid {
+			row.Top5 = roundPtr(top5.Float64, 4)
+		}
+		if top10.Valid {
+			row.Top10 = roundPtr(top10.Float64, 4)
 		}
 		result[fundID] = row
 	}

@@ -48,6 +48,10 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
+    if (originalRequest?.skipAuthRedirect) {
+      return Promise.reject(error);
+    }
+
     // 如果是 401 且不是刷新 token 请求，尝试刷新 token
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;

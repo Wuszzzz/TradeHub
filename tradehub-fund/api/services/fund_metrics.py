@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from decimal import Decimal
 
 from api.models import FundEvaluationSnapshot, FundNavHistory
 
@@ -9,6 +10,16 @@ RETURN_PERIODS = {
     '6m': 180,
     '1y': 365,
 }
+
+RANK_PERIODS = (
+    'week',
+    'month',
+    'quarter',
+    'half_year',
+    'this_year',
+    'year',
+    'since_inception',
+)
 
 
 def calculate_nav_returns(nav_list, today=None):
@@ -27,6 +38,37 @@ def calculate_nav_returns(nav_list, today=None):
         else:
             result[period_name] = None
     return result
+
+
+def calculate_rank_period_growth(nav_list, period, latest_date=None):
+    if len(nav_list) < 2:
+        return None
+
+    latest_row = nav_list[-1]
+    latest_date = latest_date or latest_row.nav_date
+    start_boundary = _pick_rank_period_start(period, latest_date, nav_list[0].nav_date)
+    if not start_boundary:
+        return None
+
+    if period == 'since_inception':
+        start_row = nav_list[0]
+    else:
+        start_row = next((row for row in reversed(nav_list) if row.nav_date <= start_boundary), None)
+        if start_row is None:
+            start_row = next((row for row in nav_list if row.nav_date >= start_boundary), nav_list[0])
+
+    if not start_row or not latest_row or not start_row.unit_nav or start_row.unit_nav <= 0:
+        return None
+
+    value = (latest_row.unit_nav - start_row.unit_nav) / start_row.unit_nav * Decimal('100')
+    return value.quantize(Decimal('0.0001'))
+
+
+def calculate_rank_growths(nav_list, latest_date=None):
+    return {
+        period: calculate_rank_period_growth(nav_list, period, latest_date=latest_date)
+        for period in RANK_PERIODS
+    }
 
 
 def calculate_nav_risk_metrics(nav_list):
@@ -151,6 +193,7 @@ def _snapshot_to_metrics(snapshot):
         'max_drawdown': decimal_text(snapshot.max_drawdown),
         'volatility': decimal_text(snapshot.volatility),
         'sharpe': decimal_text(snapshot.sharpe),
+        'raw_data': snapshot.raw_data or {},
         'returns': {
             '1m': decimal_text(snapshot.return_1m),
             '3m': decimal_text(snapshot.return_3m),
@@ -175,3 +218,45 @@ def _to_float(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _pick_rank_period_start(period, latest_date, first_date):
+    if period == '30d':
+        return latest_date - timedelta(days=30)
+    if period == 'this_year':
+        return date(latest_date.year, 1, 1)
+    if period == 'month':
+        return _shift_months(latest_date, -1)
+    if period == 'quarter':
+        return _shift_months(latest_date, -3)
+    if period == 'half_year':
+        return _shift_months(latest_date, -6)
+    if period == 'year':
+        return _shift_years(latest_date, -1)
+    if period == 'week':
+        return latest_date - timedelta(days=7)
+    if period == 'since_inception':
+        return first_date
+    return None
+
+
+def _shift_months(source_date, months):
+    month_index = source_date.month - 1 + months
+    year = source_date.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(source_date.day, _days_in_month(year, month))
+    return date(year, month, day)
+
+
+def _shift_years(source_date, years):
+    year = source_date.year + years
+    day = min(source_date.day, _days_in_month(year, source_date.month))
+    return date(year, source_date.month, day)
+
+
+def _days_in_month(year, month):
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+    return (next_month - date(year, month, 1)).days

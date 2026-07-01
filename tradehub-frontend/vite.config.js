@@ -12,6 +12,7 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
+    allowedHosts: ['dev.ew-ai.com.cn'],
     proxy: {
       '/api/stock': {
         target: stockApiTarget,

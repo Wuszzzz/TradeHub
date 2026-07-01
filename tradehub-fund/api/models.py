@@ -44,6 +44,31 @@ class Fund(models.Model):
         null=True, blank=True,
         help_text='最新净值日期'
     )
+    return_this_year = models.DecimalField(
+        max_digits=12, decimal_places=4,
+        null=True, blank=True,
+        help_text='今年以来涨幅（%）'
+    )
+    return_30d = models.DecimalField(
+        max_digits=12, decimal_places=4,
+        null=True, blank=True,
+        help_text='近30天涨幅（%）'
+    )
+    return_1m = models.DecimalField(
+        max_digits=12, decimal_places=4,
+        null=True, blank=True,
+        help_text='近1月涨幅（%）'
+    )
+    return_3m = models.DecimalField(
+        max_digits=12, decimal_places=4,
+        null=True, blank=True,
+        help_text='近3月涨幅（%）'
+    )
+    return_1y = models.DecimalField(
+        max_digits=12, decimal_places=4,
+        null=True, blank=True,
+        help_text='近1年涨幅（%）'
+    )
 
     # 实时估值数据（缓存）
     estimate_nav = models.DecimalField(

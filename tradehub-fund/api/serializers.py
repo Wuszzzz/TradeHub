@@ -31,7 +31,9 @@ class FundSerializer(serializers.ModelSerializer):
             'tracking_index', 'risk_level', 'fund_status',
             'purchase_status', 'redemption_status', 'management_fee', 'custody_fee',
             'profile_source', 'profile_updated_at',
-            'latest_nav', 'latest_nav_date', 'estimate_nav', 'estimate_growth', 'estimate_time',
+            'latest_nav', 'latest_nav_date',
+            'return_this_year', 'return_30d', 'return_1m', 'return_3m', 'return_1y',
+            'estimate_nav', 'estimate_growth', 'estimate_time',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
@@ -380,6 +382,8 @@ class FundPerformanceRankSnapshotSerializer(serializers.ModelSerializer):
     volatility = serializers.SerializerMethodField()
     sharpe = serializers.SerializerMethodField()
     evaluation = serializers.SerializerMethodField()
+    top5_holding_ratio = serializers.SerializerMethodField()
+    top10_holding_ratio = serializers.SerializerMethodField()
 
     class Meta:
         model = FundPerformanceRankSnapshot
@@ -387,6 +391,7 @@ class FundPerformanceRankSnapshotSerializer(serializers.ModelSerializer):
             'id', 'fund', 'fund_code', 'fund_name', 'fund_type', 'rank_type',
             'fund_size', 'fund_size_text', 'rank_date', 'period',
             'growth', 'rank', 'total', 'quartile', 'source',
+            'top5_holding_ratio', 'top10_holding_ratio',
             'max_drawdown', 'volatility', 'sharpe', 'evaluation',
             'created_at', 'updated_at',
         ]
@@ -416,6 +421,14 @@ class FundPerformanceRankSnapshotSerializer(serializers.ModelSerializer):
             'total': obj.total,
             **metrics,
         })
+
+    def get_top5_holding_ratio(self, obj):
+        raw = self._metrics(obj).get('raw_data') or {}
+        return raw.get('top5_holding_ratio')
+
+    def get_top10_holding_ratio(self, obj):
+        raw = self._metrics(obj).get('raw_data') or {}
+        return raw.get('top10_holding_ratio')
 
 
 class FundEvaluationSnapshotSerializer(serializers.ModelSerializer):

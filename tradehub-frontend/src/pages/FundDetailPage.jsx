@@ -8,10 +8,7 @@ import {
   message,
   Button,
   Table,
-  Alert,
   Tag,
-  Select,
-  Typography,
 } from 'antd';
 import { CommentOutlined, DatabaseOutlined, LineChartOutlined, RobotOutlined, SyncOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
@@ -28,7 +25,8 @@ const canTryLoadHoldings = (fundData) => {
 
 const communityRequestCache = new Map();
 const unwrapList = (payload) => payload?.results || payload?.data?.results || payload || [];
-const { Text } = Typography;
+const ensureArray = (value) => Array.isArray(value) ? value : [];
+const ensureObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 
 const FundDetailPage = () => {
   const { code } = useParams();
@@ -123,7 +121,7 @@ const FundDetailPage = () => {
       const response = await fundsAPI.navHistory(code, params);
 
       // 按日期正序排列
-      const data = response.data.sort((a, b) =>
+      const data = ensureArray(response.data).sort((a, b) =>
         new Date(a.nav_date) - new Date(b.nav_date)
       );
 
@@ -136,10 +134,11 @@ const FundDetailPage = () => {
   // 加载持仓分布
   const loadPositions = async () => {
     try {
-      const response = await positionsAPI.listByFund(code);
+      const response = await positionsAPI.listByFund(code, { skipAuthRedirect: true });
+      const rows = Array.isArray(response.data) ? response.data : [];
 
       // 计算市值和盈亏
-      const positionsWithCalc = response.data.map(pos => {
+      const positionsWithCalc = rows.map(pos => {
         // 使用持仓数据中的基金净值，如果没有则使用页面的基金净值
         const latestNav = pos.fund?.latest_nav || fund?.latest_nav || 0;
         const marketValue = parseFloat(pos.holding_share) * parseFloat(latestNav);
@@ -170,8 +169,8 @@ const FundDetailPage = () => {
         period,
         limit: period === 'day' ? 180 : 120,
       });
-      setKlineData(response.data.rows || []);
-      setKlineSource(response.data.source || source);
+      setKlineData(ensureArray(response.data?.rows));
+      setKlineSource(response.data?.source || source);
     } catch {
       setKlineData([]);
     } finally {
@@ -183,7 +182,7 @@ const FundDetailPage = () => {
     setStoredSnapshotLoading(true);
     try {
       const response = await fundsAPI.storedHoldings(code);
-      setStoredSnapshot(response.data?.latest_snapshot || null);
+      setStoredSnapshot(ensureObject(response.data?.latest_snapshot));
     } catch {
       setStoredSnapshot(null);
     } finally {
@@ -194,7 +193,7 @@ const FundDetailPage = () => {
   const loadAllocations = async () => {
     try {
       const response = await fundsAPI.allocationSnapshots({ fund_code: code });
-      setAllocationSnapshots(response.data?.results || response.data || []);
+      setAllocationSnapshots(ensureArray(response.data?.results || response.data));
     } catch {
       setAllocationSnapshots([]);
     }
@@ -251,8 +250,8 @@ const FundDetailPage = () => {
   // 加载操作记录
   const loadOperations = async () => {
     try {
-      const response = await positionsAPI.listOperations({ fund_code: code });
-      setOperations(response.data);
+      const response = await positionsAPI.listOperations({ fund_code: code }, { skipAuthRedirect: true });
+      setOperations(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
       // 未认证或没有操作记录，不显示错误
       setOperations([]);
@@ -290,8 +289,12 @@ const FundDetailPage = () => {
     setCommunityLoading(true);
     try {
       const { data } = await fundsAPI.community(code, { source: 'eastmoney_guba', limit: 20 });
-      communityRequestCache.set(cacheKey, { ts: Date.now(), data });
-      setCommunity(data);
+      const safeData = {
+        ...ensureObject(data),
+        items: ensureArray(data?.items),
+      };
+      communityRequestCache.set(cacheKey, { ts: Date.now(), data: safeData });
+      setCommunity(safeData);
     } catch (error) {
       setCommunity({
         fund_code: code,
@@ -350,14 +353,14 @@ const FundDetailPage = () => {
         setFund(detailRes.data);
         setEstimate(estimateRes?.data || null);
         setAccuracy(accuracyRes?.data || null);
-        setMarketQuote(marketRes?.data || null);
-        setIntraday(intradayRes?.data?.snapshots || []);
+        setMarketQuote(ensureObject(marketRes?.data));
+        setIntraday(ensureArray(intradayRes?.data?.snapshots));
         const eligible = canTryLoadHoldings(detailRes.data);
         setHoldingsEligible(eligible);
         setLoading(false);
 
         const marketSymbol = detailRes.data?.fund_code?.startsWith('5') || detailRes.data?.fund_code?.startsWith('6') ? `sh${detailRes.data.fund_code}` : `sz${detailRes.data.fund_code}`;
-        fundsAPI.tencentDetail(marketSymbol).then((res) => setTencentDetail(res.data || null)).catch(() => setTencentDetail(null));
+        fundsAPI.tencentDetail(marketSymbol).then((res) => setTencentDetail(ensureObject(res.data))).catch(() => setTencentDetail(null));
 
         // 加载成分股（指数 / ETF / 联接基金都尝试）
         if (eligible) {
@@ -407,28 +410,81 @@ const FundDetailPage = () => {
   };
 
   const premium = calculatePremium();
-  const tencentAsset = tencentDetail?.asset || {};
-  const tencentRank = tencentDetail?.rank_info || {};
-  const tencentSameTypeFunds = tencentDetail?.same_type_funds || [];
-  const tencentSameSeriesFunds = tencentDetail?.same_series_funds || [];
-  const tencentNotices = tencentDetail?.notices || [];
-  const storedItems = storedSnapshot?.items || [];
-  const storedIndustries = allocationSnapshots.filter((item) => item.allocation_type === 'industry');
-  const storedAssets = allocationSnapshots.filter((item) => item.allocation_type === 'asset');
-  const displayIndustries = storedIndustries.length > 0
-    ? storedIndustries
-    : (tencentAsset.industry || []).map((item) => ({ name: item.name, ratio: item.ratio }));
-  const displayAssets = storedAssets.length > 0
-    ? storedAssets
-    : (tencentAsset.asset || []).map((item) => ({ name: item.name, ratio: item.ratio }));
-  const topIndustryNames = displayIndustries.slice(0, 3).map((item) => item.name);
-  const displaySectorMarkets = displayIndustries
-    .map((item) => ({
-      ...item,
-      market: sectorMarketMap[item.name],
-    }))
-    .filter((item) => item.market)
-    .sort((a, b) => Number(b.ratio || 0) - Number(a.ratio || 0));
+  const tencentAsset = useMemo(() => ensureObject(tencentDetail?.asset), [tencentDetail]);
+  const tencentRank = useMemo(() => ensureObject(tencentDetail?.rank_info), [tencentDetail]);
+  const tencentSameTypeFunds = useMemo(() => ensureArray(tencentDetail?.same_type_funds), [tencentDetail]);
+  const tencentSameSeriesFunds = useMemo(() => ensureArray(tencentDetail?.same_series_funds), [tencentDetail]);
+  const tencentNotices = useMemo(() => ensureArray(tencentDetail?.notices), [tencentDetail]);
+  const storedItems = useMemo(() => ensureArray(storedSnapshot?.items), [storedSnapshot]);
+  const safeAllocationSnapshots = useMemo(() => ensureArray(allocationSnapshots), [allocationSnapshots]);
+  const storedIndustries = useMemo(
+    () => safeAllocationSnapshots.filter((item) => item.allocation_type === 'industry'),
+    [safeAllocationSnapshots]
+  );
+  const storedAssets = useMemo(
+    () => safeAllocationSnapshots.filter((item) => item.allocation_type === 'asset'),
+    [safeAllocationSnapshots]
+  );
+  const displayIndustries = useMemo(() => (
+    storedIndustries.length > 0
+      ? storedIndustries
+      : ensureArray(tencentAsset.industry).map((item) => ({ name: item.name, ratio: item.ratio }))
+  ), [storedIndustries, tencentAsset]);
+  const displayAssets = useMemo(() => (
+    storedAssets.length > 0
+      ? storedAssets
+      : ensureArray(tencentAsset.asset).map((item) => ({ name: item.name, ratio: item.ratio }))
+  ), [storedAssets, tencentAsset]);
+  const topIndustryNames = useMemo(
+    () => displayIndustries.slice(0, 3).map((item) => item.name),
+    [displayIndustries]
+  );
+  const displaySectorMarkets = useMemo(() => (
+    displayIndustries
+      .map((item) => ({
+        ...item,
+        market: sectorMarketMap[item.name],
+      }))
+      .filter((item) => item.market)
+      .sort((a, b) => Number(b.ratio || 0) - Number(a.ratio || 0))
+  ), [displayIndustries, sectorMarketMap]);
+  const performanceRows = [
+    {
+      label: '最近30天',
+      growth: fund?.return_30d ?? null,
+      rank: tencentRank.jz_rank?.w4,
+      level: tencentRank.ratio_level?.w4,
+      total: tencentRank.total,
+    },
+    {
+      label: '最近1月',
+      growth: fund?.return_1m ?? tencentRank.jzzf?.w4 ?? null,
+      rank: tencentRank.jz_rank?.w4,
+      level: tencentRank.ratio_level?.w4,
+      total: tencentRank.total,
+    },
+    {
+      label: '最近3个月',
+      growth: fund?.return_3m ?? tencentRank.jzzf?.w13 ?? null,
+      rank: tencentRank.jz_rank?.w13,
+      level: tencentRank.ratio_level?.w13,
+      total: tencentRank.total,
+    },
+    {
+      label: '最近1年',
+      growth: fund?.return_1y ?? tencentRank.jzzf?.w52 ?? null,
+      rank: tencentRank.jz_rank?.w52,
+      level: tencentRank.ratio_level?.w52,
+      total: tencentRank.total,
+    },
+    {
+      label: '今年以来',
+      growth: fund?.return_this_year ?? tencentRank.jzzf?.year ?? null,
+      rank: tencentRank.jz_rank?.year,
+      level: tencentRank.ratio_level?.year,
+      total: tencentRank.total,
+    },
+  ];
   const holdingsDisplay = useMemo(() => {
     if (holdings.length > 0) return holdings;
     if (storedItems.length > 0) {
@@ -452,7 +508,7 @@ const FundDetailPage = () => {
       holding_type: (tencentAsset.stock || []).length > 0 ? 'stock' : 'product',
     }));
   }, [holdings, storedItems, tencentAsset.product, tencentAsset.stock]);
-  const holdingsWithProfiles = holdingsDisplay.map((item) => {
+  const holdingsWithProfiles = useMemo(() => holdingsDisplay.map((item) => {
     const profile = stockProfileMap[item.stock_code] || {};
     return {
       ...item,
@@ -460,7 +516,7 @@ const FundDetailPage = () => {
       stock_industry: profile.industry,
       stock_market: profile.market,
     };
-  });
+  }), [holdingsDisplay, stockProfileMap]);
   const holdingsDisplaySource = holdings.length > 0
     ? (holdingsSource === 'tencent_fund' ? '腾讯实时' : holdingsSource === 'eastmoney' ? '东方财富实时' : '实时接口')
     : storedItems.length > 0
@@ -668,9 +724,14 @@ const FundDetailPage = () => {
     }],
   }), [intraday]);
 
+  const sectorNamesKey = useMemo(
+    () => displayIndustries.map((item) => item.name).filter(Boolean).join('|'),
+    [displayIndustries]
+  );
+
   useEffect(() => {
     loadSectorMarkets(displayIndustries.map((item) => item.name));
-  }, [allocationSnapshots, tencentDetail]);
+  }, [sectorNamesKey]);
 
   useEffect(() => {
     const stockCodes = [...new Set(
@@ -705,7 +766,7 @@ const FundDetailPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [holdingsDisplay]);
+  }, [holdingsDisplay.map((item) => `${item.holding_type}:${item.stock_code}`).join('|')]);
   const marketPriceChartOption = useMemo(() => ({
     tooltip: { trigger: 'axis' },
     xAxis: {
@@ -934,21 +995,23 @@ const FundDetailPage = () => {
 
       <div className="fund-detail-grid">
         <Card title="业绩表现及排名" className="fund-panel">
+          <div style={{ marginBottom: 12, padding: '12px 14px', borderRadius: 10, background: '#eef6ff', border: '1px solid #cfe1ff', color: '#24426f', fontSize: 13, lineHeight: 1.6 }}>
+            <div style={{ fontWeight: 600 }}>净值增长率优先使用第三方同步值</div>
+            <div>最近1月、最近3个月、最近1年、今年以来直接展示已落库的第三方排行收益；最近30天按本地净值历史补算。</div>
+          </div>
           <Table
             pagination={false}
             size="small"
             rowKey="label"
-            dataSource={[
-              { label: '今年以来', growth: tencentRank.jzzf?.year, rank: tencentRank.jz_rank?.year, level: tencentRank.ratio_level?.year, total: tencentRank.total },
-              { label: '近一个月', growth: tencentRank.jzzf?.w4, rank: tencentRank.jz_rank?.w4, level: tencentRank.ratio_level?.w4, total: tencentRank.total },
-              { label: '近三个月', growth: tencentRank.jzzf?.w13, rank: tencentRank.jz_rank?.w13, level: tencentRank.ratio_level?.w13, total: tencentRank.total },
-              { label: '近半年', growth: tencentRank.jzzf?.w26, rank: tencentRank.jz_rank?.w26, level: tencentRank.ratio_level?.w26, total: tencentRank.total },
-              { label: '近一年', growth: tencentRank.jzzf?.w52, rank: tencentRank.jz_rank?.w52, level: tencentRank.ratio_level?.w52, total: tencentRank.total },
-              { label: '成立以来', growth: tencentRank.jzzf?.total, rank: tencentRank.jz_rank?.total, level: tencentRank.ratio_level?.total, total: tencentRank.total },
-            ]}
+            dataSource={performanceRows}
             columns={[
               { title: '区间', dataIndex: 'label', key: 'label' },
-              { title: '净值增长率', dataIndex: 'growth', key: 'growth', render: (v) => v != null ? `${v}%` : '--' },
+              {
+                title: '净值增长率',
+                dataIndex: 'growth',
+                key: 'growth',
+                render: (v) => v != null ? `${Number(v).toFixed(2)}%` : '--',
+              },
               { title: '同类排名', key: 'rank', render: (_, record) => record.rank && record.total ? `${record.rank}/${record.total}` : '--' },
               { title: '四分位', dataIndex: 'level', key: 'level', render: (v) => ({ 1: '优秀', 2: '良好', 3: '一般', 4: '不佳' }[v] || '--') },
             ]}
@@ -1062,7 +1125,9 @@ const FundDetailPage = () => {
               ]}
             />
           ) : (
-            <Alert type="info" showIcon title="当前基金暂无可展示的持仓详情" description="已尝试东方财富与腾讯基金两套来源，当前未返回可展示持仓。" />
+            <div style={{ padding: '12px 14px', borderRadius: 10, background: '#f7f9fc', border: '1px solid #d9e2ef', color: '#475467', fontSize: 13, lineHeight: 1.6 }}>
+              当前基金暂无可展示的持仓详情，已尝试东方财富与腾讯基金两套来源。
+            </div>
           )}
         </Card>
 
@@ -1089,13 +1154,10 @@ const FundDetailPage = () => {
           )}
         >
           {community?.error && (
-            <Alert
-              type="warning"
-              showIcon
-              title="社区源暂不可用"
-              description={community.error}
-              style={{ marginBottom: 12 }}
-            />
+            <div style={{ marginBottom: 12, padding: '12px 14px', borderRadius: 10, background: '#fff7e6', border: '1px solid #ffd591', color: '#8c5a00', fontSize: 13, lineHeight: 1.6 }}>
+              <div style={{ fontWeight: 600 }}>社区源暂不可用</div>
+              <div>{community.error}</div>
+            </div>
           )}
           {communityLoading ? (
             <div className="stock-empty-wrap"><Spin /></div>
@@ -1110,13 +1172,26 @@ const FundDetailPage = () => {
                   title: '帖子',
                   dataIndex: 'title',
                   key: 'title',
-                  ellipsis: true,
                   render: (title, record) => (
-                    <Space direction="vertical" size={2}>
-                      <a href={record.url} target="_blank" rel="noreferrer">{title}</a>
+                    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                      <a
+                        href={record.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          display: 'block',
+                          maxWidth: '100%',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={title}
+                      >
+                        {title}
+                      </a>
                       <Space size={4} wrap>
                         <Tag>{record.source_name || community?.source_name || record.source}</Tag>
-                        {record.author && <Text type="secondary">{record.author}</Text>}
+                        {record.author && <span style={{ color: '#667085', fontSize: 12 }}>{record.author}</span>}
                       </Space>
                     </Space>
                   ),
@@ -1176,29 +1251,44 @@ const FundDetailPage = () => {
           className="fund-panel fund-panel-span-2"
           extra={(
             <Space wrap>
-              <Select
-                value={klineSource}
-                onChange={(value) => {
-                  setKlineSource(value);
-                  loadMarketKline(value, klinePeriod);
-                }}
-                options={[
+              <Space.Compact>
+                {[
                   { label: '东方财富', value: 'eastmoney' },
                   { label: '腾讯', value: 'tencent' },
                   { label: '搜狐', value: 'sohu' },
-                ]}
-                style={{ width: 120 }}
-              />
-              <Select
-                value={klinePeriod}
-                onChange={setKlinePeriod}
-                options={[
+                ].map((item) => (
+                  <Button
+                    key={item.value}
+                    size="small"
+                    type={klineSource === item.value ? 'primary' : 'default'}
+                    onClick={() => {
+                      setKlineSource(item.value);
+                      loadMarketKline(item.value, klinePeriod);
+                    }}
+                  >
+                    {item.label}
+                  </Button>
+                ))}
+              </Space.Compact>
+              <Space.Compact>
+                {[
                   { label: '日线', value: 'day' },
                   { label: '周线', value: 'week' },
                   { label: '月线', value: 'month' },
-                ]}
-                style={{ width: 100 }}
-              />
+                ].map((item) => (
+                  <Button
+                    key={item.value}
+                    size="small"
+                    type={klinePeriod === item.value ? 'primary' : 'default'}
+                    onClick={() => {
+                      setKlinePeriod(item.value);
+                      loadMarketKline(klineSource, item.value);
+                    }}
+                  >
+                    {item.label}
+                  </Button>
+                ))}
+              </Space.Compact>
             </Space>
           )}
         >
@@ -1217,13 +1307,10 @@ const FundDetailPage = () => {
             </>
           ) : marketQuote?.market_price && navHistory.length > 0 ? (
             <>
-              <Alert
-                type="warning"
-                showIcon
-                title="未取到标准 K 线，已回退到参考走势"
-                description="当前源未返回场内 K 线，因此退回到价格参考线。"
-                style={{ marginBottom: 16 }}
-              />
+              <div style={{ marginBottom: 16, padding: '12px 14px', borderRadius: 10, background: '#fff7e6', border: '1px solid #ffd591', color: '#8c5a00', fontSize: 13, lineHeight: 1.6 }}>
+                <div style={{ fontWeight: 600 }}>未取到标准 K 线，已回退到参考走势</div>
+                <div>当前源未返回场内 K 线，因此退回到价格参考线。</div>
+              </div>
               <ReactECharts option={marketPriceChartOption} style={{ height: 320 }} />
             </>
           ) : (

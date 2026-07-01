@@ -1,7 +1,6 @@
-import { Layout, Typography, theme } from 'antd';
+import { Layout, theme } from 'antd';
 
 const { Footer: AntFooter } = Layout;
-const { Text } = Typography;
 
 const Footer = () => {
   const { token } = theme.useToken();
@@ -14,9 +13,9 @@ const Footer = () => {
         borderTop: `1px solid ${token.colorBorderSecondary}`,
       }}
     >
-      <Text type="secondary" style={{ fontSize: 13 }}>
+      <span style={{ color: token.colorTextSecondary, fontSize: 13 }}>
         © 2024-2026 tradehub
-      </Text>
+      </span>
     </AntFooter>
   );
 };

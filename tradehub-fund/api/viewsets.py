@@ -4,6 +4,7 @@ API ViewSets
 实现所有 API 端点
 """
 import logging
+from datetime import date, timedelta
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
@@ -38,6 +39,7 @@ from .serializers import (
 )
 from .sources import SourceRegistry
 from .services import recalculate_all_positions
+from .services.fund_returns import recalculate_fund_returns
 from fundval.config import config
 
 logger = logging.getLogger(__name__)
@@ -927,6 +929,7 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
                             fund.save(update_fields=['latest_nav', 'latest_nav_date', 'updated_at'])
                             from .services.daily_fact import upsert_daily_fact_from_latest_nav
                             upsert_daily_fact_from_latest_nav(fund, source=data.get('_source') or 'batch_update_nav')
+                            recalculate_fund_returns(fund)
 
                         results[code] = {
                             'fund_code': code,
@@ -1015,6 +1018,7 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
                         fund.latest_nav = data.get('nav')
                         fund.latest_nav_date = data.get('nav_date')
                         fund.save(update_fields=['latest_nav', 'latest_nav_date'])
+                        recalculate_fund_returns(fund)
 
                         results[code] = {
                             'fund_code': code,
@@ -2052,6 +2056,119 @@ class FundPerformanceRankSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
                 'range_end_date': fund.range_end_date,
                 'range_start_nav': fund.range_start_nav,
                 'range_end_nav': fund.range_end_nav,
+                'top5_holding_ratio': (metric.get('raw_data') or {}).get('top5_holding_ratio'),
+                'top10_holding_ratio': (metric.get('raw_data') or {}).get('top10_holding_ratio'),
+                'max_drawdown': metric.get('max_drawdown'),
+                'volatility': metric.get('volatility'),
+                'sharpe': metric.get('sharpe'),
+                'evaluation': metric.get('evaluation'),
+            })
+        if page is not None:
+            return self.get_paginated_response(rows)
+        return Response(rows)
+
+    def _daily_nav_list(self, request, rank_date):
+        from .services.fund_metrics import metrics_for_funds
+
+        queryset = FundNavHistory.objects.select_related('fund').filter(
+            nav_date=rank_date,
+            daily_growth__isnull=False,
+        )
+        fund_code = request.query_params.get('fund_code')
+        fund_type = request.query_params.get('fund_type') or request.query_params.get('category')
+        industry = request.query_params.get('industry')
+        min_size = request.query_params.get('min_size')
+        max_size = request.query_params.get('max_size')
+        if fund_code:
+            queryset = queryset.filter(fund__fund_code=fund_code)
+        queryset = apply_fund_ranking_filters(queryset, fund_type, min_size, max_size, industry, prefix='fund__')
+        queryset = queryset.order_by('-daily_growth', 'fund__fund_code')
+        page = self.paginate_queryset(queryset)
+        objects = list(page) if page is not None else list(queryset)
+        metrics = metrics_for_funds([obj.fund_id for obj in objects])
+        total = queryset.count()
+        offset = 0
+        if page is not None and hasattr(self.paginator, 'page'):
+            offset = (self.paginator.page.number - 1) * self.paginator.get_page_size(request)
+        rows = []
+        for index, nav in enumerate(objects, start=offset + 1):
+            fund = nav.fund
+            metric = metrics.get(fund.id) or {}
+            rows.append({
+                'id': str(nav.id),
+                'fund': str(fund.id),
+                'fund_code': fund.fund_code,
+                'fund_name': fund.fund_name,
+                'fund_type': fund.fund_type,
+                'fund_size': fund.fund_size,
+                'fund_size_text': fund.fund_size_text,
+                'rank_type': 'performance',
+                'rank_date': nav.nav_date,
+                'period': 'day',
+                'growth': nav.daily_growth,
+                'rank': index,
+                'total': total,
+                'quartile': None,
+                'source': 'fund_nav_history',
+                'top5_holding_ratio': (metric.get('raw_data') or {}).get('top5_holding_ratio'),
+                'top10_holding_ratio': (metric.get('raw_data') or {}).get('top10_holding_ratio'),
+                'max_drawdown': metric.get('max_drawdown'),
+                'volatility': metric.get('volatility'),
+                'sharpe': metric.get('sharpe'),
+                'evaluation': metric.get('evaluation'),
+            })
+        if page is not None:
+            return self.get_paginated_response(rows)
+        return Response(rows)
+
+    def _intraday_estimate_list(self, request, rank_date):
+        from .services.fund_metrics import metrics_for_funds
+
+        queryset = Fund.objects.exclude(
+            estimate_growth__isnull=True,
+        ).filter(
+            estimate_time__date=rank_date,
+        )
+        fund_code = request.query_params.get('fund_code')
+        fund_type = request.query_params.get('fund_type') or request.query_params.get('category')
+        industry = request.query_params.get('industry')
+        min_size = request.query_params.get('min_size')
+        max_size = request.query_params.get('max_size')
+        if fund_code:
+            queryset = queryset.filter(fund_code=fund_code)
+        queryset = apply_fund_ranking_filters(queryset, fund_type, min_size, max_size, industry)
+        queryset = queryset.order_by('-estimate_growth', 'fund_code')
+        page = self.paginate_queryset(queryset)
+        objects = list(page) if page is not None else list(queryset)
+        metrics = metrics_for_funds([obj.id for obj in objects])
+        total = queryset.count()
+        offset = 0
+        if page is not None and hasattr(self.paginator, 'page'):
+            offset = (self.paginator.page.number - 1) * self.paginator.get_page_size(request)
+        rows = []
+        for index, fund in enumerate(objects, start=offset + 1):
+            metric = metrics.get(fund.id) or {}
+            rows.append({
+                'id': str(fund.id),
+                'fund': str(fund.id),
+                'fund_code': fund.fund_code,
+                'fund_name': fund.fund_name,
+                'fund_type': fund.fund_type,
+                'fund_size': fund.fund_size,
+                'fund_size_text': fund.fund_size_text,
+                'rank_type': 'intraday_estimate',
+                'rank_date': rank_date,
+                'period': 'day',
+                'growth': fund.estimate_growth,
+                'rank': index,
+                'total': total,
+                'quartile': None,
+                'source': 'eastmoney_fundgz',
+                'estimate_nav': fund.estimate_nav,
+                'estimate_growth': fund.estimate_growth,
+                'estimate_time': fund.estimate_time,
+                'top5_holding_ratio': (metric.get('raw_data') or {}).get('top5_holding_ratio'),
+                'top10_holding_ratio': (metric.get('raw_data') or {}).get('top10_holding_ratio'),
                 'max_drawdown': metric.get('max_drawdown'),
                 'volatility': metric.get('volatility'),
                 'sharpe': metric.get('sharpe'),
@@ -2088,7 +2205,7 @@ class FundPerformanceRankSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.order_by('-rank_date', 'period', 'rank')
 
     def list(self, request, *args, **kwargs):
-        from .services.fund_metrics import metrics_for_funds
+        from .services.fund_metrics import metrics_for_funds, calculate_rank_growths
 
         start_date = parse_date(request.query_params.get('start_date') or '')
         end_date = parse_date(request.query_params.get('end_date') or '')
@@ -2096,12 +2213,40 @@ class FundPerformanceRankSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
             if start_date > end_date:
                 return Response({'error': 'start_date 不能晚于 end_date'}, status=status.HTTP_400_BAD_REQUEST)
             return self._range_list(request, start_date, end_date)
+        rank_date = parse_date(request.query_params.get('rank_date') or '')
+        period = request.query_params.get('period')
+        rank_type = request.query_params.get('rank_type') or request.query_params.get('type') or 'performance'
+        if rank_date and period == 'day' and rank_type in ('performance', 'gain'):
+            if rank_date == timezone.localdate():
+                return self._intraday_estimate_list(request, rank_date)
+            return self._daily_nav_list(request, rank_date)
 
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
         objects = list(page) if page is not None else list(queryset)
         metrics = metrics_for_funds([obj.fund_id for obj in objects])
+        periods_to_recalc = {'week', 'month', 'quarter', 'half_year', 'this_year', 'year', 'since_inception'}
+        nav_growth_map = {}
+        target_fund_ids = [obj.fund_id for obj in objects if obj.period in periods_to_recalc and obj.fund_id]
+        if target_fund_ids:
+            cutoff = date.today() - timedelta(days=3700)
+            nav_rows = (
+                FundNavHistory.objects
+                .filter(fund_id__in=set(target_fund_ids), nav_date__gte=cutoff)
+                .order_by('fund_id', 'nav_date')
+            )
+            grouped_navs = {}
+            for row in nav_rows:
+                grouped_navs.setdefault(row.fund_id, []).append(row)
+            for fund_id, nav_list in grouped_navs.items():
+                nav_growth_map[str(fund_id)] = calculate_rank_growths(nav_list)
         serializer = self.get_serializer(objects, many=True, context={**self.get_serializer_context(), 'fund_metrics': metrics})
+        for item in serializer.data:
+            period_name = item.get('period')
+            fund_id = str(item.get('fund')) if item.get('fund') is not None else None
+            growths = nav_growth_map.get(fund_id)
+            if growths and period_name in growths and growths[period_name] is not None:
+                item['growth'] = str(growths[period_name])
         if page is not None:
             return self.get_paginated_response(serializer.data)
         return Response(serializer.data)

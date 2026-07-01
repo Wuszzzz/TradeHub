@@ -148,9 +148,9 @@ export const accountsAPI = {
 // 持仓管理
 export const positionsAPI = {
   list: (accountId) => api.get('/positions/', { params: { account_id: accountId } }),
-  listByFund: (fundCode) => api.get('/positions/', { params: { fund_code: fundCode } }),
+  listByFund: (fundCode, config = {}) => api.get('/positions/', { params: { fund_code: fundCode }, ...config }),
   createOperation: (data) => api.post('/positions/operations/', data),
-  listOperations: (params) => api.get('/positions/operations/', { params }),
+  listOperations: (params, config = {}) => api.get('/positions/operations/', { params, ...config }),
   deleteOperation: (id) => api.delete(`/positions/operations/${id}/`),
   batchDeleteOperations: (operationIds) => api.post('/positions/operations/batch_delete/', { operation_ids: operationIds }),
   clearPosition: (id) => api.delete(`/positions/${id}/clear/`),

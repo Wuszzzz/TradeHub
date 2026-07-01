@@ -1,4 +1,4 @@
-import { Dropdown, Grid, Layout } from 'antd';
+import { Grid, Layout } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   AccountBookOutlined,
@@ -183,12 +183,10 @@ const MainLayout = ({ children }) => {
               ))}
             </div>
           </div>
-          <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
-            <button className="trade-user-chip" type="button">
-              <UserOutlined />
-              <span>{user?.username || 'Trader'}</span>
-            </button>
-          </Dropdown>
+          <button className="trade-user-chip" type="button" onClick={() => navigate('/dashboard/profile')}>
+            <UserOutlined />
+            <span>{user?.username || 'Trader'}</span>
+          </button>
         </Header>
         <Content className="trade-mobile-content">
           <div className="trade-mobile-switch">
@@ -233,16 +231,14 @@ const MainLayout = ({ children }) => {
       onSwitchWorkspace={switchWorkspace}
       bottomItems={bottomItems}
       headerExtra={(
-        <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
-          <button className="product-shell-account" type="button">
-            <span className="product-shell-avatar">{(user?.username || 'T').slice(0, 1).toUpperCase()}</span>
-            <span className="product-shell-account-copy">
-              <span>{user?.username || 'TradeHub 用户'}</span>
-              <small>账户：4453728992</small>
-            </span>
-            <span className="product-shell-chevron">⌄</span>
-          </button>
-        </Dropdown>
+        <button className="product-shell-account" type="button" onClick={() => navigate('/dashboard/profile')}>
+          <span className="product-shell-avatar">{(user?.username || 'T').slice(0, 1).toUpperCase()}</span>
+          <span className="product-shell-account-copy">
+            <span>{user?.username || 'TradeHub 用户'}</span>
+            <small>账户：4453728992</small>
+          </span>
+          <span className="product-shell-chevron">⌄</span>
+        </button>
       )}
     >
       {children}

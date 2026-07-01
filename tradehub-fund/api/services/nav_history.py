@@ -8,6 +8,7 @@ import logging
 
 from ..models import Fund, FundNavHistory
 from ..sources import SourceRegistry
+from .fund_returns import recalculate_fund_returns
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ def sync_nav_history(
         fund.latest_nav = latest.unit_nav
         fund.latest_nav_date = latest.nav_date
         fund.save(update_fields=['latest_nav', 'latest_nav_date'])
+    recalculate_fund_returns(fund)
 
     return count
 

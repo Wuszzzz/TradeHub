@@ -277,6 +277,94 @@ def sync_top_fund_rankings_task(limit=500, sync_profiles_limit=500):
 
 
 @shared_task
+def sync_top_fund_rankings_intraday_task(limit=1000, sync_profiles_limit=1000):
+    """盘中每 10 分钟同步前 1000 名基金排行，并补齐基础资料。"""
+    from api.services.fund_rankings import sync_top_fund_rankings
+
+    summary = sync_top_fund_rankings(limit=limit, sync_profiles_limit=sync_profiles_limit)
+    logger.info(f'基金 Top 排行盘中同步完成：{summary}')
+    return summary
+
+
+@shared_task
+def sync_top_fund_intraday_estimates_task(limit=1000, source_name='eastmoney'):
+    """盘中刷新前排基金的今日实时估值涨幅，用于当天日榜。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from django.utils import timezone
+    from api.models import Fund, FundPerformanceRankSnapshot
+    from api.sources import SourceRegistry
+    from api.services.daily_fact import upsert_latest_estimate_fact
+
+    source = SourceRegistry.get_source(source_name) or SourceRegistry.get_source('eastmoney')
+    if not source:
+        return {'success': False, 'error': 'no estimate source'}
+
+    latest_date = (
+        FundPerformanceRankSnapshot.objects
+        .filter(rank_type='performance', period='day')
+        .order_by('-rank_date')
+        .values_list('rank_date', flat=True)
+        .first()
+    )
+    ranked_codes = []
+    if latest_date:
+        ranked_codes = list(
+            FundPerformanceRankSnapshot.objects
+            .filter(rank_type='performance', period='day', rank_date=latest_date)
+            .order_by('rank')
+            .values_list('fund__fund_code', flat=True)
+            [:limit]
+        )
+    if not ranked_codes:
+        ranked_codes = list(Fund.objects.order_by('fund_code').values_list('fund_code', flat=True)[:limit])
+
+    fund_map = {fund.fund_code: fund for fund in Fund.objects.filter(fund_code__in=ranked_codes)}
+    now = timezone.now()
+    success = 0
+    skipped = 0
+    failed = 0
+    errors = []
+
+    def fetch(code):
+        return code, source.fetch_estimate(code)
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = [executor.submit(fetch, code) for code in ranked_codes]
+        for future in as_completed(futures):
+            try:
+                code, data = future.result()
+                fund = fund_map.get(code)
+                if not fund or not data or data.get('estimate_nav') is None:
+                    skipped += 1
+                    continue
+                estimate_time = data.get('estimate_time')
+                if estimate_time and timezone.is_naive(estimate_time):
+                    estimate_time = timezone.make_aware(estimate_time, timezone.get_current_timezone())
+                fund.estimate_nav = data.get('estimate_nav')
+                fund.estimate_growth = data.get('estimate_growth')
+                fund.estimate_time = estimate_time or now
+                fund.save(update_fields=['estimate_nav', 'estimate_growth', 'estimate_time'])
+                upsert_latest_estimate_fact(fund)
+                success += 1
+            except Exception as exc:
+                failed += 1
+                if len(errors) < 20:
+                    errors.append(str(exc))
+
+    summary = {
+        'success': success,
+        'skipped': skipped,
+        'failed': failed,
+        'limit': limit,
+        'source': source_name,
+        'rank_date': latest_date.isoformat() if latest_date else None,
+        'errors': errors,
+    }
+    logger.info(f'基金盘中估值涨幅同步完成：{summary}')
+    return summary
+
+
+@shared_task
 def sync_ranked_fund_basic_profiles_task(limit=1000):
     """同步已落库排行基金的基础资料、基金公司、规模和板块配置。"""
     from api.models import FundPerformanceRankSnapshot
@@ -291,6 +379,57 @@ def sync_ranked_fund_basic_profiles_task(limit=1000):
     )
     summary = sync_fund_basic_profiles(codes, limit=limit)
     logger.info(f'排行基金基础资料同步完成：{summary}')
+    return summary
+
+
+@shared_task
+def sync_quarterly_fund_holdings_and_evaluations_task(limit=2000, source_name='tencent_fund', window_days=370):
+    """每季度 1 号同步前 2000 只基金持仓，并触发 Go 评估快照重算。"""
+    from api.models import Fund
+    from api.services.fund_profile import sync_fund_holdings_snapshot
+
+    codes = list(Fund.objects.order_by('fund_code').values_list('fund_code', flat=True)[:limit])
+    holdings_success = 0
+    holdings_skipped = 0
+    holdings_failed = 0
+    holding_errors = []
+
+    for fund_code in codes:
+        try:
+            result = sync_fund_holdings_snapshot(fund_code, source_name=source_name)
+            if result.get('success'):
+                holdings_success += 1
+            else:
+                holdings_skipped += 1
+        except Exception as exc:
+            holdings_failed += 1
+            holding_errors.append({'fund_code': fund_code, 'error': str(exc)})
+            logger.warning(f'季度持仓同步失败：{fund_code}, 错误：{exc}')
+
+    go_summary = {'triggered': False}
+    endpoint = config.get('fund_research_url', '') or 'http://fund-research:18081'
+    try:
+        resp = requests.post(
+            f'{endpoint.rstrip("/")}/api/fund-research/v1/sync/evaluations',
+            json={'limit': limit, 'window_days': window_days},
+            timeout=1800,
+        )
+        resp.raise_for_status()
+        go_summary = {'triggered': True, 'response': resp.json()}
+    except Exception as exc:
+        go_summary = {'triggered': False, 'error': str(exc)}
+        logger.error(f'季度 Go 评估重算失败: {exc}')
+
+    summary = {
+        'limit': limit,
+        'source_name': source_name,
+        'holdings_success': holdings_success,
+        'holdings_skipped': holdings_skipped,
+        'holdings_failed': holdings_failed,
+        'holding_errors': holding_errors[:50],
+        'go_evaluation': go_summary,
+    }
+    logger.info(f'季度基金持仓与评估同步完成：{summary}')
     return summary
 
 

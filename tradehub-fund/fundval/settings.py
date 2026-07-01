@@ -233,6 +233,16 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': crontab(minute=0, hour=14),  # 每天 14:00 同步盘中各周期前 500 名基金排行
         'kwargs': {'limit': 500, 'sync_profiles_limit': 500},
     },
+    'sync-top-fund-rankings-intraday-10m': {
+        'task': 'api.tasks.sync_top_fund_rankings_intraday_task',
+        'schedule': crontab(minute='*/10', hour='9-14'),  # 交易时段每 10 分钟同步前 1000 名基金排行
+        'kwargs': {'limit': 1000, 'sync_profiles_limit': 1000},
+    },
+    'sync-top-fund-intraday-estimates-10m': {
+        'task': 'api.tasks.sync_top_fund_intraday_estimates_task',
+        'schedule': crontab(minute='2-59/10', hour='9-14'),  # 交易时段每 10 分钟刷新前 1000 名基金今日估值涨幅
+        'kwargs': {'limit': 1000, 'source_name': 'eastmoney'},
+    },
     'sync-top-fund-rankings-close': {
         'task': 'api.tasks.sync_top_fund_rankings_task',
         'schedule': crontab(minute=10, hour=15),  # 每天 15:10 收盘后同步各周期前 500 名基金排行
@@ -287,5 +297,10 @@ CELERY_BEAT_SCHEDULE = {
     'generate-monthly-report': {
         'task': 'api.tasks.generate_investment_reports',
         'schedule': crontab(minute=0, hour=9, day_of_month=1),  # 每月 1 日 9:00
+    },
+    'sync-quarterly-fund-holdings-and-evaluations': {
+        'task': 'api.tasks.sync_quarterly_fund_holdings_and_evaluations_task',
+        'schedule': crontab(minute=30, hour=8, day_of_month=1, month_of_year='1,4,7,10'),
+        'kwargs': {'limit': 2000, 'source_name': 'tencent_fund', 'window_days': 370},
     },
 }

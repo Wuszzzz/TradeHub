@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { Alert, Button, Card, Col, DatePicker, Drawer, Row, Statistic, Tabs, Table, Select, Spin, Empty, Tag, Space, Input, Typography, message, Switch } from 'antd';
-import { AimOutlined, FireOutlined, FundOutlined, PlusOutlined, StarOutlined, SyncOutlined, TrophyOutlined } from '@ant-design/icons';
+import { AimOutlined, FireOutlined, FundOutlined, PlusOutlined, StarOutlined, SwapOutlined, SyncOutlined, TrophyOutlined } from '@ant-design/icons';
 import { fundResearchAPI, fundsAPI, watchlistsAPI } from '../api';
 
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
 const STORAGE_KEY = 'tradehub.rankings.filters.v2';
+const COMPARE_SELECTION_KEY = 'tradehub.fund.compare.selection.v1';
 
 const CATEGORIES = [
   { value: '', label: '全部' },
@@ -49,6 +50,10 @@ const metricColor = (value, reverse = false) => {
   return good ? '#3f8600' : '#cf1322';
 };
 const evaluationColor = (level) => ({ 优选: 'green', 观察: 'gold', 谨慎: 'red' }[level] || 'default');
+const normalizeFundForCompare = (fund) => ({
+  fund_code: fund?.fund_code,
+  fund_name: fund?.fund_name || fund?.name || fund?.fund_code,
+});
 
 const RankingsPage = () => {
   const navigate = useNavigate();
@@ -67,10 +72,13 @@ const RankingsPage = () => {
   const [category, setCategory] = useState(cachedFilters.category || '');
   const [sizeRange, setSizeRange] = useState(cachedFilters.sizeRange || '');
   const [industry, setIndustry] = useState(cachedFilters.industry || '');
+  const [top5RatioRange, setTop5RatioRange] = useState(cachedFilters.top5RatioRange || '');
+  const [top10RatioRange, setTop10RatioRange] = useState(cachedFilters.top10RatioRange || '');
   const [data, setData] = useState([]);
   const [sectorMap, setSectorMap] = useState({});
   const [researchMap, setResearchMap] = useState({});
   const [meta, setMeta] = useState({});
+  const [pagination, setPagination] = useState({ current: 1, pageSize: 100, total: 0 });
   const [watchlists, setWatchlists] = useState([]);
   const [selectedWatchlistId, setSelectedWatchlistId] = useState(cachedFilters.watchlistId || '');
   const [detailRecord, setDetailRecord] = useState(null);
@@ -80,6 +88,15 @@ const RankingsPage = () => {
   const [loading, setLoading] = useState(false);
   const [syncLoading, setSyncLoading] = useState(false);
   const [watchlistLoading, setWatchlistLoading] = useState(false);
+  const [compareFunds, setCompareFunds] = useState(() => {
+    try {
+      return (JSON.parse(localStorage.getItem(COMPARE_SELECTION_KEY) || '[]') || []).slice(0, 5);
+    } catch {
+      return [];
+    }
+  });
+  const [compareOptions, setCompareOptions] = useState([]);
+  const [compareSearchLoading, setCompareSearchLoading] = useState(false);
   const requestIdRef = useRef(0);
   const isStoredRanking = type === 'performance' || type === 'gain' || type === 'popular';
   const isRangeRanking = isStoredRanking && rangeMode && rankDateRange?.[0] && rankDateRange?.[1];
@@ -124,9 +141,11 @@ const RankingsPage = () => {
       category,
       sizeRange,
       industry,
+      top5RatioRange,
+      top10RatioRange,
       watchlistId: selectedWatchlistId,
     }));
-  }, [type, period, rankDate, rangeMode, rankDateRange, category, sizeRange, industry, selectedWatchlistId]);
+  }, [type, period, rankDate, rangeMode, rankDateRange, category, sizeRange, industry, top5RatioRange, top10RatioRange, selectedWatchlistId]);
 
   useEffect(() => {
     watchlistsAPI.list()
@@ -139,7 +158,57 @@ const RankingsPage = () => {
       .catch(() => setWatchlists([]));
   }, []);
 
-  const loadData = async () => {
+  useEffect(() => {
+    localStorage.setItem(COMPARE_SELECTION_KEY, JSON.stringify(compareFunds));
+  }, [compareFunds]);
+
+  const addCompareFund = (fund) => {
+    const nextFund = normalizeFundForCompare(fund);
+    if (!nextFund.fund_code) return;
+    setCompareFunds((prev) => {
+      if (prev.some((item) => item.fund_code === nextFund.fund_code)) return prev;
+      if (prev.length >= 5) {
+        message.warning('最多选择 5 只基金进行对比');
+        return prev;
+      }
+      return [...prev, nextFund];
+    });
+  };
+
+  const removeCompareFund = (code) => {
+    setCompareFunds((prev) => prev.filter((item) => item.fund_code !== code));
+  };
+
+  const handleCompareSearch = async (keyword) => {
+    if (!keyword || keyword.length < 2) {
+      setCompareOptions([]);
+      return;
+    }
+    setCompareSearchLoading(true);
+    try {
+      const { data: res } = await fundsAPI.search(keyword);
+      const rows = res.results || res || [];
+      setCompareOptions(rows.slice(0, 20).map((item) => ({
+        value: item.fund_code,
+        label: `${item.fund_code} - ${item.fund_name}`,
+        fund: item,
+      })));
+    } catch {
+      setCompareOptions([]);
+    } finally {
+      setCompareSearchLoading(false);
+    }
+  };
+
+  const goCompare = () => {
+    if (compareFunds.length < 2) {
+      message.warning('请至少选择 2 只基金再对比');
+      return;
+    }
+    navigate(`/dashboard/compare?codes=${compareFunds.map((item) => item.fund_code).join(',')}`);
+  };
+
+  const loadData = async (nextPage = pagination.current, nextPageSize = pagination.pageSize) => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setResearchMap({});
@@ -147,7 +216,7 @@ const RankingsPage = () => {
     try {
       if (isStoredRanking) {
         const [minSize, maxSize] = sizeRange ? sizeRange.split('-') : [];
-        const { data: res } = await fundsAPI.performanceRanks({
+        const queryParams = {
           rank_type: type === 'popular' ? 'popular' : 'performance',
           period,
           start_date: isRangeRanking ? rankDateRange[0] : undefined,
@@ -157,11 +226,35 @@ const RankingsPage = () => {
           min_size: minSize || undefined,
           max_size: maxSize || undefined,
           industry: industry || undefined,
-          page_size: 100,
-        });
+          page: nextPage,
+          page_size: nextPageSize,
+        };
+        let { data: res } = await fundsAPI.performanceRanks(queryParams);
+        const shouldFallbackToLatest =
+          !isRangeRanking &&
+          period === 'day' &&
+          rankDate &&
+          (res.count === 0 || (Array.isArray(res.results) && res.results.length === 0));
+        if (shouldFallbackToLatest) {
+          const fallbackParams = { ...queryParams };
+          delete fallbackParams.rank_date;
+          const fallback = await fundsAPI.performanceRanks(fallbackParams);
+          res = fallback.data;
+          const fallbackRows = res.results || res || [];
+          const latestRankDate = fallbackRows[0]?.rank_date || '';
+          if (latestRankDate && latestRankDate !== rankDate) {
+            setRankDate(latestRankDate);
+            message.info(`所选排行日暂无数据，已切换到最新排行日 ${latestRankDate}`);
+          }
+        }
         const rows = res.results || res || [];
         if (requestId !== requestIdRef.current) return;
         setData(rows);
+        setPagination({
+          current: nextPage,
+          pageSize: nextPageSize,
+          total: res.count || rows.length,
+        });
         setMeta({
           rankDate: rows[0]?.rank_date || '',
           period: isRangeRanking ? 'range' : (rows[0]?.period || period),
@@ -171,6 +264,16 @@ const RankingsPage = () => {
         });
         loadSectorsForRows(rows, requestId);
         enrichResearch(rows, requestId);
+        const [top5Min, top5Max] = top5RatioRange ? top5RatioRange.split('-').map(Number) : [];
+        const [top10Min, top10Max] = top10RatioRange ? top10RatioRange.split('-').map(Number) : [];
+        const filteredRows = rows.filter((item) => {
+          const top5 = Number(item.top5_holding_ratio);
+          const top10 = Number(item.top10_holding_ratio);
+          if (top5RatioRange && (!Number.isFinite(top5) || (Number.isFinite(top5Min) && top5 < top5Min) || (Number.isFinite(top5Max) && top5 > top5Max))) return false;
+          if (top10RatioRange && (!Number.isFinite(top10) || (Number.isFinite(top10Min) && top10 < top10Min) || (Number.isFinite(top10Max) && top10 > top10Max))) return false;
+          return true;
+        });
+        setData(filteredRows);
         return;
       }
       const [minSize, maxSize] = sizeRange ? sizeRange.split('-') : [];
@@ -180,17 +283,23 @@ const RankingsPage = () => {
         min_size: minSize || undefined,
         max_size: maxSize || undefined,
         industry: industry || undefined,
-        page: 1,
+        page: nextPage,
       });
       const rows = res.results || [];
       if (requestId !== requestIdRef.current) return;
       setData(rows);
+      setPagination({
+        current: nextPage,
+        pageSize: nextPageSize,
+        total: res.count || rows.length,
+      });
       setMeta({});
       loadSectorsForRows(rows, requestId);
       enrichResearch(rows, requestId);
     } catch {
       if (requestId !== requestIdRef.current) return;
       setData([]);
+      setPagination(prev => ({ ...prev, total: 0 }));
     } finally {
       if (requestId === requestIdRef.current) {
         setLoading(false);
@@ -227,7 +336,10 @@ const RankingsPage = () => {
     }
   };
 
-  useEffect(() => { loadData(); }, [type, period, rankDate, rangeMode, rankDateRange, category, sizeRange, industry]);
+  useEffect(() => {
+    setPagination(prev => ({ ...prev, current: 1 }));
+    loadData(1, pagination.pageSize);
+  }, [type, period, rankDate, rangeMode, rankDateRange, category, sizeRange, industry, top5RatioRange, top10RatioRange]);
 
   const loadSectorAnalysis = async () => {
     const fundCodes = displayData.slice(0, 80).map((item) => item.fund_code).filter(Boolean);
@@ -336,6 +448,20 @@ const RankingsPage = () => {
       render: (_, record) => record.fund_size_text || (record.fund_size ? `${Number(record.fund_size).toFixed(2)}亿` : '-'),
     },
     {
+      title: '前5持仓占比',
+      dataIndex: 'top5_holding_ratio',
+      key: 'top5_holding_ratio',
+      width: 110,
+      render: v => v != null && v !== '' ? `${Number(v).toFixed(2)}%` : '-',
+    },
+    {
+      title: '前10持仓占比',
+      dataIndex: 'top10_holding_ratio',
+      key: 'top10_holding_ratio',
+      width: 120,
+      render: v => v != null && v !== '' ? `${Number(v).toFixed(2)}%` : '-',
+    },
+    {
       title: '所属板块',
       key: 'sectors',
       width: 260,
@@ -425,10 +551,11 @@ const RankingsPage = () => {
       title: '操作',
       key: 'actions',
       fixed: 'right',
-      width: 130,
+      width: 190,
       render: (_, record) => (
         <Space size={4}>
           <Button size="small" icon={<StarOutlined />} loading={watchlistLoading} onClick={() => addToWatchlist(record)}>自选</Button>
+          <Button size="small" icon={<SwapOutlined />} onClick={() => addCompareFund(record)}>对比</Button>
         </Space>
       ),
     },
@@ -490,6 +617,32 @@ const RankingsPage = () => {
           }}
         />
         <Select
+          value={top5RatioRange || undefined}
+          placeholder="前5持仓占比"
+          allowClear
+          style={{ width: 140 }}
+          onChange={v => setTop5RatioRange(v || '')}
+          options={[
+            { value: '0-20', label: '0%-20%' },
+            { value: '20-40', label: '20%-40%' },
+            { value: '40-60', label: '40%-60%' },
+            { value: '60-100', label: '60%以上' },
+          ]}
+        />
+        <Select
+          value={top10RatioRange || undefined}
+          placeholder="前10持仓占比"
+          allowClear
+          style={{ width: 150 }}
+          onChange={v => setTop10RatioRange(v || '')}
+          options={[
+            { value: '0-30', label: '0%-30%' },
+            { value: '30-50', label: '30%-50%' },
+            { value: '50-70', label: '50%-70%' },
+            { value: '70-100', label: '70%以上' },
+          ]}
+        />
+        <Select
           value={selectedWatchlistId || undefined}
           placeholder="加入到自选"
           style={{ width: 160 }}
@@ -511,6 +664,47 @@ const RankingsPage = () => {
             : `数据优先来自 PostgreSQL 落库排行和净值历史，回撤/波动/夏普/评估分由 Go 投研服务批量计算写回数据库；板块和标签也由 Go 投研服务增强。当前周期：${PERIODS.find(item => item.value === period)?.label || period} / 排行日：${meta.rankDate || rankDate || '最新落库'} / 首行周期：${displayData[0]?.period || data[0]?.period || '-'}`}
         />
       )}
+      <Card
+        size="small"
+        style={{ marginBottom: 12, borderColor: '#c9dfff', background: 'linear-gradient(135deg, #f6fbff 0%, #ffffff 72%)' }}
+        title={<Space><SwapOutlined />基金对比栏</Space>}
+        extra={
+          <Space wrap>
+            <Select
+              showSearch
+              value={undefined}
+              placeholder="搜索基金代码或名称加入"
+              filterOption={false}
+              onSearch={handleCompareSearch}
+              onSelect={(_, option) => addCompareFund(option.fund)}
+              options={compareOptions}
+              loading={compareSearchLoading}
+              style={{ width: 260 }}
+              suffixIcon={<PlusOutlined />}
+            />
+            <Button onClick={() => setCompareFunds([])} disabled={!compareFunds.length}>清空</Button>
+            <Button type="primary" icon={<SwapOutlined />} onClick={goCompare} disabled={compareFunds.length < 2}>
+              对比 {compareFunds.length || ''}
+            </Button>
+          </Space>
+        }
+      >
+        <Space wrap>
+          {compareFunds.length ? compareFunds.map((item) => (
+            <Tag
+              key={item.fund_code}
+              closable
+              onClose={(event) => {
+                event.preventDefault();
+                removeCompareFund(item.fund_code);
+              }}
+              color="blue"
+            >
+              {item.fund_code} {item.fund_name}
+            </Tag>
+          )) : <Text type="secondary">可在下方表格勾选基金，或直接搜索代码；选择 2-5 只后进入对比页。</Text>}
+        </Space>
+      </Card>
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
         <Col xs={12} md={6}><Card size="small"><Statistic title="候选基金" value={enrichedData.length} /></Card></Col>
         <Col xs={12} md={6}><Card size="small"><Statistic title="优选" value={enrichedData.filter(item => item.evaluation?.level === '优选').length} /></Card></Col>
@@ -532,7 +726,35 @@ const RankingsPage = () => {
             dataSource={enrichedData}
             columns={columns}
             rowKey="fund_code"
-            pagination={false}
+            rowSelection={{
+              selectedRowKeys: compareFunds.map((item) => item.fund_code),
+              preserveSelectedRowKeys: true,
+              getCheckboxProps: (record) => ({
+                disabled: compareFunds.length >= 5 && !compareFunds.some((item) => item.fund_code === record.fund_code),
+              }),
+              onSelect: (record, selected) => {
+                if (selected) addCompareFund(record);
+                else removeCompareFund(record.fund_code);
+              },
+              onSelectAll: (selected, _selectedRows, changeRows) => {
+                if (selected) {
+                  changeRows.forEach(addCompareFund);
+                } else {
+                  const removeCodes = new Set(changeRows.map((item) => item.fund_code));
+                  setCompareFunds((prev) => prev.filter((item) => !removeCodes.has(item.fund_code)));
+                }
+              },
+            }}
+            pagination={{
+              current: pagination.current,
+              pageSize: pagination.pageSize,
+              total: pagination.total,
+              showSizeChanger: true,
+              showTotal: total => `共 ${total} 条`,
+            }}
+            onChange={(nextPagination) => {
+              loadData(nextPagination.current, nextPagination.pageSize);
+            }}
             size="small"
             scroll={{ x: 'max-content' }}
           />

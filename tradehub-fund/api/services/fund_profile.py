@@ -239,6 +239,18 @@ def sync_fund_basic_profile(fund_code, source_name='tencent_fund', target_code=N
         fund.fund_size_text = asset_raw.get('total_money')
         fund.fund_size = parse_size_text(asset_raw.get('total_money'))
         update_fields.extend(['fund_size_text', 'fund_size'])
+    rank_info = profile.get('rank_info') or {}
+    growth_map = rank_info.get('jzzf') or {}
+    direct_return_fields = {
+        'return_1m': growth_map.get('w4'),
+        'return_3m': growth_map.get('w13'),
+        'return_1y': growth_map.get('w52'),
+    }
+    for field_name, raw_value in direct_return_fields.items():
+        if raw_value in (None, ''):
+            continue
+        setattr(fund, field_name, _decimal_or_none(raw_value))
+        update_fields.append(field_name)
     fund.save(update_fields=list(dict.fromkeys(update_fields)))
     allocation_count = sync_fund_allocations(fund, profile, source=source_name)
     rank_count = sync_fund_performance_ranks(fund, profile, source=source_name)
