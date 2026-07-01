@@ -10,6 +10,7 @@ import FundsPage from './pages/FundsPage';
 import FundDetailPage from './pages/FundDetailPage';
 import AccountsPage from './pages/AccountsPage';
 import PositionsPage from './pages/PositionsPage';
+import PortfolioHealthPage from './pages/PortfolioHealthPage';
 import WatchlistsPage from './pages/WatchlistsPage';
 import SettingsPage from './pages/SettingsPage';
 import AdminPage from './pages/AdminPage';
@@ -160,6 +161,16 @@ function AppInner() {
                   <PrivateRoute>
                     <MainLayout>
                       <PositionsPage />
+                    </MainLayout>
+                  </PrivateRoute>
+                }
+              />
+              <Route
+                path="/dashboard/portfolio-health"
+                element={
+                  <PrivateRoute>
+                    <MainLayout>
+                      <PortfolioHealthPage />
                     </MainLayout>
                   </PrivateRoute>
                 }

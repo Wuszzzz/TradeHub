@@ -32,6 +32,7 @@ func main() {
 	mux.HandleFunc("GET /api/fund-research/v1/funds/filter", s.FundFilter)
 	mux.HandleFunc("POST /api/fund-research/v1/funds/check", s.FundCheck)
 	mux.HandleFunc("POST /api/fund-research/v1/funds/similarity", s.FundSimilarity)
+	mux.HandleFunc("POST /api/fund-research/v1/portfolio/health", s.PortfolioHealth)
 	mux.HandleFunc("GET /api/fund-research/v1/funds/by-stock", s.FundByStock)
 	mux.HandleFunc("GET /api/fund-research/v1/managers", s.Managers)
 	mux.HandleFunc("GET /api/fund-research/v1/sectors/related", s.RelatedSectors)

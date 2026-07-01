@@ -179,3 +179,152 @@ type LocalRank struct {
 	Total    int
 	RankDate time.Time
 }
+
+type PortfolioHealthRequest struct {
+	AccountID   string              `json:"account_id,omitempty"`
+	AccountName string              `json:"account_name,omitempty"`
+	Positions   []PortfolioPosition `json:"positions"`
+}
+
+type PortfolioPosition struct {
+	FundCode        string                    `json:"fund_code"`
+	FundName        string                    `json:"fund_name"`
+	FundType        string                    `json:"fund_type,omitempty"`
+	Company         string                    `json:"company,omitempty"`
+	HoldingShare    float64                   `json:"holding_share"`
+	HoldingCost     float64                   `json:"holding_cost"`
+	HoldingNav      float64                   `json:"holding_nav"`
+	LatestNav       float64                   `json:"latest_nav"`
+	EstimateNav     float64                   `json:"estimate_nav,omitempty"`
+	MarketValue     float64                   `json:"market_value"`
+	PnL             float64                   `json:"pnl"`
+	PnLRate         float64                   `json:"pnl_rate"`
+	Return30D       float64                   `json:"return_30d,omitempty"`
+	Return1M        float64                   `json:"return_1m,omitempty"`
+	Return3M        float64                   `json:"return_3m,omitempty"`
+	Return1Y        float64                   `json:"return_1y,omitempty"`
+	ReturnThisYear  float64                   `json:"return_this_year,omitempty"`
+	MaxDrawdown     float64                   `json:"max_drawdown,omitempty"`
+	Volatility      float64                   `json:"volatility,omitempty"`
+	AssetAllocation []PortfolioAllocationItem `json:"asset_allocation,omitempty"`
+	Industry        []PortfolioAllocationItem `json:"industry,omitempty"`
+	TopHoldings     []PortfolioHoldingItem    `json:"top_holdings,omitempty"`
+	DataFlags       []string                  `json:"data_flags,omitempty"`
+}
+
+type PortfolioAllocationItem struct {
+	Name  string  `json:"name"`
+	Ratio float64 `json:"ratio"`
+}
+
+type PortfolioHoldingItem struct {
+	Code     string  `json:"code,omitempty"`
+	Name     string  `json:"name"`
+	Weight   float64 `json:"weight"`
+	Industry string  `json:"industry,omitempty"`
+}
+
+type PortfolioHealthResult struct {
+	Score             int                         `json:"score"`
+	Level             string                      `json:"level"`
+	Tags              []string                    `json:"tags"`
+	Summary           string                      `json:"summary"`
+	Overview          PortfolioOverview           `json:"overview"`
+	Dimensions        []PortfolioDimension        `json:"dimensions"`
+	FundTypeBreakdown []PortfolioBreakdownItem    `json:"fund_type_breakdown"`
+	AssetBreakdown    []PortfolioBreakdownItem    `json:"asset_breakdown"`
+	IndustryBreakdown []PortfolioBreakdownItem    `json:"industry_breakdown"`
+	PositionAnalysis  []PortfolioPositionAnalysis `json:"position_analysis"`
+	Overlap           PortfolioOverlap            `json:"overlap"`
+	Findings          []PortfolioFinding          `json:"findings"`
+	Suggestions        []string                    `json:"suggestions"`
+	DataQuality        PortfolioDataQuality        `json:"data_quality"`
+	AIPrompt           string                      `json:"ai_prompt"`
+}
+
+type PortfolioOverview struct {
+	AccountID          string  `json:"account_id,omitempty"`
+	AccountName        string  `json:"account_name,omitempty"`
+	PositionCount      int     `json:"position_count"`
+	TotalCost          float64 `json:"total_cost"`
+	TotalMarketValue   float64 `json:"total_market_value"`
+	TotalPnL           float64 `json:"total_pnl"`
+	TotalPnLRate       float64 `json:"total_pnl_rate"`
+	WeightedReturn30D  float64 `json:"weighted_return_30d"`
+	WeightedReturn1M   float64 `json:"weighted_return_1m"`
+	WeightedReturn3M   float64 `json:"weighted_return_3m"`
+	WeightedReturn1Y   float64 `json:"weighted_return_1y"`
+	WeightedReturnYTD  float64 `json:"weighted_return_ytd"`
+	MaxPositionWeight  float64 `json:"max_position_weight"`
+	Top3PositionWeight float64 `json:"top3_position_weight"`
+}
+
+type PortfolioDimension struct {
+	Key       string   `json:"key"`
+	Label     string   `json:"label"`
+	Score     int      `json:"score"`
+	MaxScore  int      `json:"max_score"`
+	Reasons   []string `json:"reasons"`
+}
+
+type PortfolioBreakdownItem struct {
+	Name        string   `json:"name"`
+	Weight      float64  `json:"weight"`
+	MarketValue float64  `json:"market_value"`
+	Count       int      `json:"count"`
+	PnL         float64  `json:"pnl"`
+	PnLRate     float64  `json:"pnl_rate"`
+	Return30D   float64  `json:"return_30d,omitempty"`
+	ReturnYTD   float64  `json:"return_ytd,omitempty"`
+	FundCodes   []string `json:"fund_codes,omitempty"`
+}
+
+type PortfolioPositionAnalysis struct {
+	FundCode      string   `json:"fund_code"`
+	FundName      string   `json:"fund_name"`
+	FundType      string   `json:"fund_type,omitempty"`
+	Weight        float64  `json:"weight"`
+	MarketValue   float64  `json:"market_value"`
+	PnL           float64  `json:"pnl"`
+	PnLRate       float64  `json:"pnl_rate"`
+	Return30D     float64  `json:"return_30d,omitempty"`
+	Return3M      float64  `json:"return_3m,omitempty"`
+	Return1Y      float64  `json:"return_1y,omitempty"`
+	ReturnYTD     float64  `json:"return_ytd,omitempty"`
+	Role          string   `json:"role"`
+	Contribution  float64  `json:"contribution"`
+	RiskLevel     string   `json:"risk_level"`
+	ProblemTags   []string `json:"problem_tags"`
+	DataFlags     []string `json:"data_flags,omitempty"`
+}
+
+type PortfolioOverlap struct {
+	MaxHoldingName       string                 `json:"max_holding_name,omitempty"`
+	MaxHoldingExposure   float64                `json:"max_holding_exposure,omitempty"`
+	RepeatedHoldings     []PortfolioOverlapItem `json:"repeated_holdings"`
+	EstimatedDuplication float64                `json:"estimated_duplication"`
+}
+
+type PortfolioOverlapItem struct {
+	Name      string   `json:"name"`
+	Code      string   `json:"code,omitempty"`
+	Exposure  float64  `json:"exposure"`
+	FundCodes []string `json:"fund_codes"`
+}
+
+type PortfolioFinding struct {
+	Level   string `json:"level"`
+	Title   string `json:"title"`
+	Detail  string `json:"detail"`
+	Metric  string `json:"metric,omitempty"`
+	Section string `json:"section"`
+}
+
+type PortfolioDataQuality struct {
+	Score                  int      `json:"score"`
+	MissingNavCount        int      `json:"missing_nav_count"`
+	MissingReturnCount     int      `json:"missing_return_count"`
+	MissingAllocationCount int      `json:"missing_allocation_count"`
+	MissingHoldingCount    int      `json:"missing_holding_count"`
+	Warnings               []string `json:"warnings"`
+}

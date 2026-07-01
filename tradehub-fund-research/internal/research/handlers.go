@@ -14,7 +14,7 @@ func (s *Server) Health(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) Summary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: map[string]any{
-		"features": []string{"4433", "filter", "check", "similarity", "by-stock", "managers", "related-sector", "tag-recommend", "sync"},
+		"features": []string{"4433", "filter", "check", "similarity", "portfolio-health", "by-stock", "managers", "related-sector", "tag-recommend", "sync"},
 		"source":   "eastmoney",
 		"language": "go",
 	}})
@@ -111,6 +111,16 @@ func (s *Server) FundSimilarity(w http.ResponseWriter, r *http.Request) {
 	}
 	results := Similarity(funds)
 	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: map[string]any{"count": len(results), "items": results}})
+}
+
+func (s *Server) PortfolioHealth(w http.ResponseWriter, r *http.Request) {
+	var payload PortfolioHealthRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		errorJSON(w, http.StatusBadRequest, fmt.Errorf("invalid portfolio payload: %w", err))
+		return
+	}
+	result := AnalyzePortfolioHealth(payload)
+	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: result})
 }
 
 func (s *Server) FundByStock(w http.ResponseWriter, r *http.Request) {

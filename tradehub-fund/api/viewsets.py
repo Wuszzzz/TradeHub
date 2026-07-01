@@ -4,6 +4,7 @@ API ViewSets
 实现所有 API 端点
 """
 import logging
+import requests
 from datetime import date, timedelta
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
@@ -1409,6 +1410,24 @@ class PositionViewSet(viewsets.ReadOnlyModelViewSet):
         # 计算历史市值
         result = calculate_account_history(account_id, days)
 
+        return Response(result)
+
+    @action(detail=False, methods=['get'])
+    def quality(self, request):
+        """当前账户基金持仓现状体检，核心计算由 Go fund-research 服务完成。"""
+        from .services.portfolio_health import analyze_portfolio_health
+
+        account_id = request.query_params.get('account_id') or request.query_params.get('account')
+        try:
+            result = analyze_portfolio_health(request.user, account_id=account_id)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except requests.RequestException as exc:
+            logger.error(f'Go 持仓体检服务调用失败: {exc}')
+            return Response(
+                {'error': '持仓体检计算服务暂不可用', 'detail': str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         return Response(result)
 
 

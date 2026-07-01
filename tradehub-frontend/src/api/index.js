@@ -157,6 +157,9 @@ export const positionsAPI = {
   getHistory: (accountId, days = 30) => api.get('/positions/history/', {
     params: { account_id: accountId, days }
   }),
+  quality: (accountId) => api.get('/positions/quality/', {
+    params: accountId ? { account_id: accountId } : {}
+  }),
 };
 
 // 自选列表

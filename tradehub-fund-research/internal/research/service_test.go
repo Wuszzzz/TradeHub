@@ -89,6 +89,67 @@ func TestSimilarity(t *testing.T) {
 	}
 }
 
+func TestAnalyzePortfolioHealth(t *testing.T) {
+	result := AnalyzePortfolioHealth(PortfolioHealthRequest{
+		AccountID:   "acc-1",
+		AccountName: "测试账户",
+		Positions: []PortfolioPosition{
+			{
+				FundCode:       "017811",
+				FundName:       "东方人工智能主题混合C",
+				FundType:       "混合型-偏股",
+				HoldingCost:    10000,
+				MarketValue:    18000,
+				PnL:            8000,
+				PnLRate:        80,
+				Return30D:      60,
+				Return1M:       29,
+				Return3M:       120,
+				Return1Y:       255,
+				ReturnThisYear: 166,
+				AssetAllocation: []PortfolioAllocationItem{
+					{Name: "股票", Ratio: 92},
+					{Name: "银行存款", Ratio: 4},
+				},
+				Industry: []PortfolioAllocationItem{
+					{Name: "制造业", Ratio: 80},
+				},
+				TopHoldings: []PortfolioHoldingItem{
+					{Code: "002850", Name: "科达利", Weight: 6},
+				},
+			},
+			{
+				FundCode:       "000001",
+				FundName:       "测试债券",
+				FundType:       "债券型",
+				HoldingCost:    10000,
+				MarketValue:    10200,
+				PnL:            200,
+				PnLRate:        2,
+				Return30D:      0.5,
+				Return1Y:       4,
+				ReturnThisYear: 2,
+				AssetAllocation: []PortfolioAllocationItem{
+					{Name: "债券", Ratio: 90},
+					{Name: "现金", Ratio: 5},
+				},
+			},
+		},
+	})
+	if result.Score <= 0 {
+		t.Fatalf("expected positive score, got %d", result.Score)
+	}
+	if result.Overview.PositionCount != 2 {
+		t.Fatalf("expected 2 positions, got %d", result.Overview.PositionCount)
+	}
+	if len(result.FundTypeBreakdown) == 0 || len(result.AssetBreakdown) == 0 {
+		t.Fatalf("expected breakdowns, got %#v %#v", result.FundTypeBreakdown, result.AssetBreakdown)
+	}
+	if result.AIPrompt == "" {
+		t.Fatal("expected ai prompt")
+	}
+}
+
 func TestRecommendTagsFromSeedSector(t *testing.T) {
 	server := NewServer(nil, nil)
 	tags, err := server.recommendTagsForFund(t.Context(), "000055")
