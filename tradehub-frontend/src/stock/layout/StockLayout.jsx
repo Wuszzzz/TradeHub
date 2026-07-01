@@ -17,7 +17,6 @@ import {
   SettingOutlined,
   StockOutlined,
   SwapOutlined,
-  LogoutOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import zhCN from 'antd/locale/zh_CN';
@@ -129,38 +128,16 @@ const StockLayout = () => {
           onNavigate={handleNavigate}
           onSwitchWorkspace={switchWorkspace}
           headerExtra={(
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
-                <button className="product-shell-account" type="button">
-                  <span className="product-shell-avatar">{(user?.username || 'T').slice(0, 1).toUpperCase()}</span>
-                  <span className="product-shell-account-copy">
-                    <span>{user?.username || 'TradeHub 用户'}</span>
-                    <small>账户：4453728992</small>
-                  </span>
-                  <span className="product-shell-chevron">⌄</span>
-                </button>
-              </Dropdown>
-              <button
-                type="button"
-                onClick={handleLogout}
-                style={{
-                  height: 38,
-                  padding: '0 14px',
-                  borderRadius: 999,
-                  border: '1px solid rgba(220, 38, 38, 0.22)',
-                  background: 'rgba(254, 242, 242, 0.9)',
-                  color: '#b91c1c',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  cursor: 'pointer',
-                  fontWeight: 700,
-                }}
-              >
-                <LogoutOutlined />
-                退出登录
+            <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
+              <button className="product-shell-account" type="button">
+                <span className="product-shell-avatar">{(user?.username || 'T').slice(0, 1).toUpperCase()}</span>
+                <span className="product-shell-account-copy">
+                  <span>{user?.username || 'TradeHub 用户'}</span>
+                  <small>账户：4453728992</small>
+                </span>
+                <span className="product-shell-chevron">⌄</span>
               </button>
-            </div>
+            </Dropdown>
           )}
         >
           <Outlet />
