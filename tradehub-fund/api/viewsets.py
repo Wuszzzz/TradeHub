@@ -448,6 +448,118 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = FundHoldingSnapshotSerializer(snapshot)
         return Response(serializer.data)
 
+    @action(detail=True, methods=['get'], url_path='source-comparison')
+    def source_comparison(self, request, fund_code=None):
+        """对比腾讯和小倍养基已入库的基金画像/重仓差异"""
+        fund = self.get_object()
+        sources = ['tencent_fund', 'xiaobeiyangji']
+
+        def latest_allocations(source_name, allocation_type):
+            qs = FundAllocationSnapshot.objects.filter(
+                fund=fund,
+                source=source_name,
+                allocation_type=allocation_type,
+            )
+            latest_date = qs.order_by('-report_date').values_list('report_date', flat=True).first()
+            if not latest_date:
+                return None, []
+            rows = list(qs.filter(report_date=latest_date).order_by('-ratio', 'name'))
+            return latest_date, [
+                {'name': row.name, 'ratio': row.ratio}
+                for row in rows
+            ]
+
+        def latest_holding_snapshot(source_name):
+            snapshot = (
+                FundHoldingSnapshot.objects
+                .filter(fund=fund, source=source_name)
+                .prefetch_related('items')
+                .order_by('-report_date', '-updated_at')
+                .first()
+            )
+            if not snapshot:
+                return None, []
+            return snapshot, [
+                {
+                    'code': item.asset_code,
+                    'name': item.asset_name,
+                    'weight': item.weight,
+                    'change_percent': item.change_percent,
+                    'holding_type': item.holding_type,
+                }
+                for item in snapshot.items.all().order_by('sort_order', '-weight')
+            ]
+
+        def decimal_float(value):
+            if value is None:
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def compare_named_rows(left_rows, right_rows, key_field='name', value_field='ratio'):
+            left_map = {str(row.get(key_field) or '').strip(): row for row in left_rows if row.get(key_field)}
+            right_map = {str(row.get(key_field) or '').strip(): row for row in right_rows if row.get(key_field)}
+            items = []
+            for key in sorted(set(left_map) | set(right_map)):
+                left_value = decimal_float(left_map.get(key, {}).get(value_field))
+                right_value = decimal_float(right_map.get(key, {}).get(value_field))
+                diff = None
+                if left_value is not None and right_value is not None:
+                    diff = round(right_value - left_value, 4)
+                items.append({
+                    key_field: key,
+                    'tencent': left_value,
+                    'xiaobeiyangji': right_value,
+                    'diff': diff,
+                    'status': 'both' if key in left_map and key in right_map else 'only_tencent' if key in left_map else 'only_xiaobeiyangji',
+                })
+            items.sort(key=lambda item: max(abs(item.get('tencent') or 0), abs(item.get('xiaobeiyangji') or 0)), reverse=True)
+            return items
+
+        payload = {
+            'fund_code': fund.fund_code,
+            'fund_name': fund.fund_name,
+            'sources': {},
+            'comparison': {},
+        }
+
+        source_rows = {}
+        for source_name in sources:
+            asset_date, assets = latest_allocations(source_name, 'asset')
+            industry_date, industries = latest_allocations(source_name, 'industry')
+            holding_snapshot, holdings = latest_holding_snapshot(source_name)
+            source_rows[source_name] = {
+                'assets': assets,
+                'industries': industries,
+                'holdings': holdings,
+            }
+            payload['sources'][source_name] = {
+                'asset_report_date': asset_date.isoformat() if asset_date else None,
+                'industry_report_date': industry_date.isoformat() if industry_date else None,
+                'holding_report_date': holding_snapshot.report_date.isoformat() if holding_snapshot else None,
+                'holding_target_code': holding_snapshot.target_code if holding_snapshot else None,
+                'asset_count': len(assets),
+                'industry_count': len(industries),
+                'holding_count': len(holdings),
+                'assets': assets,
+                'industries': industries,
+                'holdings': holdings,
+            }
+
+        payload['comparison'] = {
+            'assets': compare_named_rows(source_rows['tencent_fund']['assets'], source_rows['xiaobeiyangji']['assets']),
+            'industries': compare_named_rows(source_rows['tencent_fund']['industries'], source_rows['xiaobeiyangji']['industries']),
+            'holdings': compare_named_rows(
+                source_rows['tencent_fund']['holdings'],
+                source_rows['xiaobeiyangji']['holdings'],
+                key_field='code',
+                value_field='weight',
+            ),
+        }
+        return Response(payload)
+
     @action(detail=False, methods=['get'], url_path='market-indices')
     def market_indices(self, request):
         """GET /api/funds/market-indices/ — 大盘指数实时行情"""

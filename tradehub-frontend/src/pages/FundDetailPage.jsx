@@ -64,6 +64,8 @@ const FundDetailPage = () => {
   const [communityLoading, setCommunityLoading] = useState(false);
   const [sectorMarketMap, setSectorMarketMap] = useState({});
   const [profileSyncSource, setProfileSyncSource] = useState('tencent_fund');
+  const [sourceComparison, setSourceComparison] = useState(null);
+  const [sourceComparisonLoading, setSourceComparisonLoading] = useState(false);
 
   // AI 分析
   const [aiModalVisible, setAiModalVisible] = useState(false);
@@ -201,6 +203,18 @@ const FundDetailPage = () => {
     }
   };
 
+  const loadSourceComparison = async () => {
+    setSourceComparisonLoading(true);
+    try {
+      const response = await fundsAPI.sourceComparison(code);
+      setSourceComparison(ensureObject(response.data));
+    } catch {
+      setSourceComparison(null);
+    } finally {
+      setSourceComparisonLoading(false);
+    }
+  };
+
   const syncStoredHoldings = async () => {
     setSyncSnapshotLoading(true);
     try {
@@ -227,6 +241,7 @@ const FundDetailPage = () => {
         fundsAPI.detail(code).then((res) => setFund(res.data)).catch(() => null),
         loadStoredHoldings(),
         loadAllocations(),
+        loadSourceComparison(),
       ]);
     } catch (error) {
       message.error(error.response?.data?.error || error.message || '同步入库失败');
@@ -384,6 +399,7 @@ const FundDetailPage = () => {
         }
         loadStoredHoldings();
         loadAllocations();
+        loadSourceComparison();
         loadMarketKline();
         loadCommunity();
         loadNavHistory(timeRange);
@@ -462,6 +478,31 @@ const FundDetailPage = () => {
       .filter((item) => item.market)
       .sort((a, b) => Number(b.ratio || 0) - Number(a.ratio || 0))
   ), [displayIndustries, sectorMarketMap]);
+  const comparisonSources = useMemo(() => ensureObject(sourceComparison?.sources), [sourceComparison]);
+  const comparison = useMemo(() => ensureObject(sourceComparison?.comparison), [sourceComparison]);
+  const comparisonValue = (value) => value == null ? '-' : `${Number(value).toFixed(2)}%`;
+  const comparisonStatus = (value) => ({
+    both: <Tag color="green">两边都有</Tag>,
+    only_tencent: <Tag color="blue">仅腾讯</Tag>,
+    only_xiaobeiyangji: <Tag color="orange">仅小倍</Tag>,
+  }[value] || <Tag>{value || '-'}</Tag>);
+  const comparisonColumns = (nameTitle = '名称') => [
+    { title: nameTitle, key: 'name', render: (_, row) => row.name || row.code || '-' },
+    { title: '腾讯', dataIndex: 'tencent', key: 'tencent', width: 90, render: comparisonValue },
+    { title: '小倍', dataIndex: 'xiaobeiyangji', key: 'xiaobeiyangji', width: 90, render: comparisonValue },
+    {
+      title: '差异',
+      dataIndex: 'diff',
+      key: 'diff',
+      width: 90,
+      render: (value) => value == null ? '-' : (
+        <span style={{ color: Number(value) >= 0 ? '#cf1322' : '#3f8600' }}>
+          {Number(value) >= 0 ? '+' : ''}{Number(value).toFixed(2)}%
+        </span>
+      ),
+    },
+    { title: '状态', dataIndex: 'status', key: 'status', width: 110, render: comparisonStatus },
+  ];
   const performanceRows = [
     {
       label: '最近30天',
@@ -1058,6 +1099,45 @@ const FundDetailPage = () => {
               <ul>{displayIndustries.map((item) => <li key={item.name}><span>{item.name}</span><strong>{Number(item.ratio).toFixed(2)}%</strong></li>)}</ul>
             </div>
           </div>
+        </Card>
+
+        <Card
+          title="信源差异对比 · 腾讯 vs 小倍养基"
+          className="fund-panel fund-panel-span-2"
+          extra={sourceComparisonLoading ? <Spin size="small" /> : <Button size="small" onClick={loadSourceComparison}>刷新对比</Button>}
+        >
+          <Space direction="vertical" size={14} style={{ width: '100%' }}>
+            <Space wrap>
+              <Tag color="blue">腾讯行业 {comparisonSources.tencent_fund?.industry_count || 0}</Tag>
+              <Tag color="orange">小倍行业 {comparisonSources.xiaobeiyangji?.industry_count || 0}</Tag>
+              <Tag color="blue">腾讯重仓 {comparisonSources.tencent_fund?.holding_count || 0}</Tag>
+              <Tag color="orange">小倍重仓 {comparisonSources.xiaobeiyangji?.holding_count || 0}</Tag>
+              <Tag>腾讯报告期 {comparisonSources.tencent_fund?.holding_report_date || comparisonSources.tencent_fund?.industry_report_date || '-'}</Tag>
+              <Tag>小倍报告期 {comparisonSources.xiaobeiyangji?.holding_report_date || comparisonSources.xiaobeiyangji?.industry_report_date || '-'}</Tag>
+            </Space>
+            {!comparisonSources.tencent_fund && !comparisonSources.xiaobeiyangji ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已入库信源数据，请分别同步腾讯和小倍养基后再对比" />
+            ) : (
+              <>
+                <Table
+                  title={() => '行业/主题占比差异'}
+                  size="small"
+                  rowKey={(row) => row.name}
+                  dataSource={ensureArray(comparison.industries).slice(0, 12)}
+                  columns={comparisonColumns('行业/主题')}
+                  pagination={false}
+                />
+                <Table
+                  title={() => '重仓权重差异'}
+                  size="small"
+                  rowKey={(row) => row.code}
+                  dataSource={ensureArray(comparison.holdings).slice(0, 15)}
+                  columns={comparisonColumns('股票代码')}
+                  pagination={false}
+                />
+              </>
+            )}
+          </Space>
         </Card>
 
         <Card title="板块行情" className="fund-panel">

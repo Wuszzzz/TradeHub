@@ -60,6 +60,7 @@ export const fundsAPI = {
   syncProfile: (fundCode, source = 'tencent_fund') => api.post(`/funds/${fundCode}/sync-profile/`, { source }),
   syncHoldings: (fundCode, source = 'tencent_fund') => api.post(`/funds/${fundCode}/sync-holdings/`, { source }),
   storedHoldings: (fundCode) => api.get(`/funds/${fundCode}/holdings-stored/`),
+  sourceComparison: (fundCode) => api.get(`/funds/${fundCode}/source-comparison/`),
   companies: (params) => api.get('/fund-companies/', { params }),
   managers: (params) => api.get('/fund-managers/', { params }),
   managerTenures: (params) => api.get('/fund-manager-tenures/', { params }),
