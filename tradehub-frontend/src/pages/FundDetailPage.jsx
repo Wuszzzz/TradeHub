@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Card,
+  Alert,
   Space,
   Spin,
   Empty,
@@ -28,6 +29,23 @@ const communityRequestCache = new Map();
 const unwrapList = (payload) => payload?.results || payload?.data?.results || payload || [];
 const ensureArray = (value) => Array.isArray(value) ? value : [];
 const ensureObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+const toFiniteNumber = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+const fmtPercent = (value, digits = 2, signed = false, empty = '--') => {
+  const number = toFiniteNumber(value);
+  if (number === null) return empty;
+  return `${signed && number >= 0 ? '+' : ''}${number.toFixed(digits)}%`;
+};
+const fmtNumber = (value, digits = 2, empty = '--') => {
+  const number = toFiniteNumber(value);
+  return number === null ? empty : number.toFixed(digits);
+};
+const fmtMoney = (value, digits = 2, empty = '--') => {
+  const number = toFiniteNumber(value);
+  return number === null ? empty : `¥${number.toFixed(digits)}`;
+};
 
 const FundDetailPage = () => {
   const { code } = useParams();
@@ -480,7 +498,7 @@ const FundDetailPage = () => {
   ), [displayIndustries, sectorMarketMap]);
   const comparisonSources = useMemo(() => ensureObject(sourceComparison?.sources), [sourceComparison]);
   const comparison = useMemo(() => ensureObject(sourceComparison?.comparison), [sourceComparison]);
-  const comparisonValue = (value) => value == null ? '-' : `${Number(value).toFixed(2)}%`;
+  const comparisonValue = (value) => value == null ? '-' : fmtPercent(value, 2, false, '-');
   const comparisonStatus = (value) => ({
     both: <Tag color="green">两边都有</Tag>,
     only_tencent: <Tag color="blue">仅腾讯</Tag>,
@@ -497,7 +515,7 @@ const FundDetailPage = () => {
       width: 90,
       render: (value) => value == null ? '-' : (
         <span style={{ color: Number(value) >= 0 ? '#cf1322' : '#3f8600' }}>
-          {Number(value) >= 0 ? '+' : ''}{Number(value).toFixed(2)}%
+          {fmtPercent(value, 2, true, '-')}
         </span>
       ),
     },
@@ -966,7 +984,7 @@ const FundDetailPage = () => {
           <div className="fund-hero-price">
             <strong>{marketQuote?.market_price || estimate?.estimate_nav || fund.latest_nav || '-'}</strong>
             <span style={{ color: Number(marketQuote?.market_growth ?? estimate?.estimate_growth ?? 0) >= 0 ? '#cf1322' : '#3f8600' }}>
-              {marketQuote?.market_growth != null ? `${Number(marketQuote.market_growth) >= 0 ? '+' : ''}${Number(marketQuote.market_growth).toFixed(2)}%` : estimate?.estimate_growth != null ? `${Number(estimate.estimate_growth) >= 0 ? '+' : ''}${Number(estimate.estimate_growth).toFixed(2)}%` : '-'}
+              {marketQuote?.market_growth != null ? fmtPercent(marketQuote.market_growth, 2, true, '-') : estimate?.estimate_growth != null ? fmtPercent(estimate.estimate_growth, 2, true, '-') : '-'}
             </span>
           </div>
         </div>
@@ -976,7 +994,7 @@ const FundDetailPage = () => {
           <div><span>实时估值</span><strong>{estimate?.estimate_nav || '-'}</strong></div>
           <div><span>净值日期</span><strong>{fund.latest_nav_date || '-'}</strong></div>
           <div><span>场内价格</span><strong>{marketQuote?.market_price || '-'}</strong></div>
-          <div><span>折溢价率</span><strong>{premium != null ? `${premium.toFixed(2)}%` : '-'}</strong></div>
+          <div><span>折溢价率</span><strong>{premium != null ? fmtPercent(premium, 2, false, '-') : '-'}</strong></div>
           <div><span>基金公司</span><strong>{fund.company_name || fund.company?.company_name || '-'}</strong></div>
           <div><span>入库持仓</span><strong>{storedSnapshot?.report_date || '未入库'}</strong></div>
           <div><span>所属板块</span><strong>{topIndustryNames.length > 0 ? topIndustryNames.join(' / ') : '-'}</strong></div>
@@ -995,7 +1013,7 @@ const FundDetailPage = () => {
         extra={(
           <div className={`fund-trend-return ${trendReturnClass}`}>
             <span>区间收益</span>
-            <strong>{trendReturn != null && timeRange !== 'INTRADAY' ? `${trendReturn >= 0 ? '+' : ''}${trendReturn.toFixed(2)}%` : '--'}</strong>
+            <strong>{trendReturn != null && timeRange !== 'INTRADAY' ? fmtPercent(trendReturn, 2, true) : '--'}</strong>
           </div>
         )}
       >
@@ -1007,18 +1025,18 @@ const FundDetailPage = () => {
           </div>
           <div>
             <span>区间高点</span>
-            <strong>{maxNav != null ? maxNav.toFixed(4) : '-'}</strong>
+            <strong>{maxNav != null ? fmtNumber(maxNav, 4, '-') : '-'}</strong>
             <em>历史净值</em>
           </div>
           <div>
             <span>区间低点</span>
-            <strong>{minNav != null ? minNav.toFixed(4) : '-'}</strong>
+            <strong>{minNav != null ? fmtNumber(minNav, 4, '-') : '-'}</strong>
             <em>历史净值</em>
           </div>
           <div>
             <span>实时估值</span>
             <strong>{estimate?.estimate_nav || '-'}</strong>
-            <em>{estimate?.estimate_growth != null ? `${Number(estimate.estimate_growth) >= 0 ? '+' : ''}${Number(estimate.estimate_growth).toFixed(2)}%` : '估值线'}</em>
+            <em>{estimate?.estimate_growth != null ? fmtPercent(estimate.estimate_growth, 2, true) : '估值线'}</em>
           </div>
         </div>
         <div className="fund-trend-toolbar">
@@ -1076,7 +1094,7 @@ const FundDetailPage = () => {
                 title: '净值增长率',
                 dataIndex: 'growth',
                 key: 'growth',
-                render: (v) => v != null ? `${Number(v).toFixed(2)}%` : '--',
+                render: (v) => v != null ? fmtPercent(v) : '--',
               },
               { title: '同类排名', key: 'rank', render: (_, record) => record.rank && record.total ? `${record.rank}/${record.total}` : '--' },
               { title: '四分位', dataIndex: 'level', key: 'level', render: (v) => ({ 1: '优秀', 2: '良好', 3: '一般', 4: '不佳' }[v] || '--') },
@@ -1092,11 +1110,11 @@ const FundDetailPage = () => {
           <div className="fund-asset-split">
             <div>
               <h4>资产配置</h4>
-              <ul>{displayAssets.map((item) => <li key={item.name}><span>{item.name}</span><strong>{Number(item.ratio).toFixed(2)}%</strong></li>)}</ul>
+              <ul>{displayAssets.map((item) => <li key={item.name}><span>{item.name}</span><strong>{fmtPercent(item.ratio)}</strong></li>)}</ul>
             </div>
             <div>
               <h4>所属板块</h4>
-              <ul>{displayIndustries.map((item) => <li key={item.name}><span>{item.name}</span><strong>{Number(item.ratio).toFixed(2)}%</strong></li>)}</ul>
+              <ul>{displayIndustries.map((item) => <li key={item.name}><span>{item.name}</span><strong>{fmtPercent(item.ratio)}</strong></li>)}</ul>
             </div>
           </div>
         </Card>
@@ -1149,7 +1167,7 @@ const FundDetailPage = () => {
               pagination={false}
               columns={[
                 { title: '板块', dataIndex: 'name', key: 'name' },
-                { title: '基金占比', dataIndex: 'ratio', key: 'ratio', width: 100, render: (v) => `${Number(v).toFixed(2)}%` },
+                { title: '基金占比', dataIndex: 'ratio', key: 'ratio', width: 100, render: (v) => fmtPercent(v) },
                 {
                   title: '板块涨跌',
                   key: 'change_percent',
@@ -1227,8 +1245,8 @@ const FundDetailPage = () => {
                     </Space>
                   ),
                 },
-                { title: '涨跌幅', dataIndex: 'change_percent', key: 'change_percent', width: 110, render: (v) => v != null ? `${Number(v) >= 0 ? '+' : ''}${Number(v).toFixed(2)}%` : '--' },
-                { title: '净值占比', dataIndex: 'weight', key: 'weight', width: 110, render: (v) => `${Number(v).toFixed(2)}%` },
+                { title: '涨跌幅', dataIndex: 'change_percent', key: 'change_percent', width: 110, render: (v) => v != null ? fmtPercent(v, 2, true) : '--' },
+                { title: '净值占比', dataIndex: 'weight', key: 'weight', width: 110, render: (v) => fmtPercent(v) },
               ]}
             />
           ) : (
@@ -1334,7 +1352,7 @@ const FundDetailPage = () => {
               { title: '基金代码', dataIndex: 'jjdm', key: 'jjdm', width: 110 },
               { title: '简称', dataIndex: 'jjjc', key: 'jjjc' },
               { title: '单位净值', dataIndex: 'dwjz', key: 'dwjz', width: 110 },
-              { title: '增长率', dataIndex: 'jzzf', key: 'jzzf', width: 100, render: (v) => `${Number(v).toFixed(2)}%` },
+              { title: '增长率', dataIndex: 'jzzf', key: 'jzzf', width: 100, render: (v) => fmtPercent(v) },
             ]}
           />
         </Card>
@@ -1348,7 +1366,7 @@ const FundDetailPage = () => {
               { title: '基金代码', dataIndex: 'jjdm', key: 'jjdm', width: 110 },
               { title: '简称', dataIndex: 'jjjc', key: 'jjjc' },
               { title: '单位净值', dataIndex: 'dwjz', key: 'dwjz', width: 110 },
-              { title: '增长率', dataIndex: 'jzzf', key: 'jzzf', width: 100, render: (v) => `${Number(v).toFixed(2)}%` },
+              { title: '增长率', dataIndex: 'jzzf', key: 'jzzf', width: 100, render: (v) => fmtPercent(v) },
             ]}
           />
         </Card>
@@ -1433,8 +1451,8 @@ const FundDetailPage = () => {
               pagination={false}
               columns={[
                 { title: '账户', dataIndex: 'account_name', key: 'account_name' },
-                { title: '持仓份额', dataIndex: 'holding_share', key: 'holding_share', render: (v) => parseFloat(v).toFixed(2) },
-                { title: '持仓成本', dataIndex: 'holding_cost', key: 'holding_cost', render: (v) => `¥${parseFloat(v).toFixed(2)}` },
+                { title: '持仓份额', dataIndex: 'holding_share', key: 'holding_share', render: (v) => fmtNumber(v) },
+                { title: '持仓成本', dataIndex: 'holding_cost', key: 'holding_cost', render: (v) => fmtMoney(v) },
                 { title: '市值', dataIndex: 'market_value', key: 'market_value', render: (v) => `¥${v}` },
                 { title: '盈亏', dataIndex: 'profit', key: 'profit', render: (v, record) => <span style={{ color: parseFloat(v) >= 0 ? '#cf1322' : '#3f8600' }}>{parseFloat(v) >= 0 ? '+' : ''}¥{v} ({record.profit_rate}%)</span> },
               ]}
