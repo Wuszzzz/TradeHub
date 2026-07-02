@@ -9,10 +9,11 @@ import {
   Button,
   Table,
   Tag,
+  Segmented,
 } from 'antd';
 import { CommentOutlined, DatabaseOutlined, LineChartOutlined, RobotOutlined, SyncOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
-import { fundsAPI, positionsAPI, stockAPI } from '../api';
+import { fundsAPI, positionsAPI, sourceAPI, stockAPI } from '../api';
 import AIAnalysisModal from '../components/AIAnalysisModal';
 import { usePreference } from '../contexts/PreferenceContext';
 
@@ -62,6 +63,7 @@ const FundDetailPage = () => {
   const [community, setCommunity] = useState(null);
   const [communityLoading, setCommunityLoading] = useState(false);
   const [sectorMarketMap, setSectorMarketMap] = useState({});
+  const [profileSyncSource, setProfileSyncSource] = useState('tencent_fund');
 
   // AI 分析
   const [aiModalVisible, setAiModalVisible] = useState(false);
@@ -202,12 +204,24 @@ const FundDetailPage = () => {
   const syncStoredHoldings = async () => {
     setSyncSnapshotLoading(true);
     try {
-      await fundsAPI.syncProfile(code);
-      const response = await fundsAPI.syncHoldings(code, 'tencent_fund');
+      if (profileSyncSource === 'xiaobeiyangji') {
+        const statusRes = await sourceAPI.getStatus('xiaobeiyangji');
+        if (!statusRes.data?.logged_in) {
+          message.warning('请先在设置页登录小倍养基，再同步该基金画像');
+          return;
+        }
+      }
+
+      await fundsAPI.syncProfile(code, profileSyncSource);
+      const response = await fundsAPI.syncHoldings(code, profileSyncSource);
       if (response.data?.success === false) {
-        message.warning('已同步基金资料，腾讯暂未返回可入库持仓');
+        message.warning(profileSyncSource === 'xiaobeiyangji'
+          ? '已同步小倍养基基金画像，但暂未返回可入库重仓'
+          : '已同步基金资料，腾讯暂未返回可入库持仓');
       } else {
-        message.success('已同步腾讯资料和持仓快照');
+        message.success(profileSyncSource === 'xiaobeiyangji'
+          ? '已同步小倍养基资料和持仓快照'
+          : '已同步腾讯资料和持仓快照');
       }
       await Promise.all([
         fundsAPI.detail(code).then((res) => setFund(res.data)).catch(() => null),
@@ -884,7 +898,18 @@ const FundDetailPage = () => {
         extra={(
           <Space wrap>
             <Button icon={<SyncOutlined />} loading={syncNavLoading} onClick={syncNavAndFacts}>同步净值</Button>
-            <Button icon={<DatabaseOutlined />} loading={syncSnapshotLoading} onClick={syncStoredHoldings}>同步入库</Button>
+            <Segmented
+              size="small"
+              value={profileSyncSource}
+              onChange={setProfileSyncSource}
+              options={[
+                { label: '腾讯', value: 'tencent_fund' },
+                { label: '小倍', value: 'xiaobeiyangji' },
+              ]}
+            />
+            <Button icon={<DatabaseOutlined />} loading={syncSnapshotLoading} onClick={syncStoredHoldings}>
+              {profileSyncSource === 'xiaobeiyangji' ? '同步小倍' : '同步入库'}
+            </Button>
             <Button type="primary" icon={<RobotOutlined />} onClick={() => setAiModalVisible(true)}>AI 分析</Button>
           </Space>
         )}
@@ -1071,7 +1096,9 @@ const FundDetailPage = () => {
           extra={(
             <Space wrap>
               <Button size="small" icon={<SyncOutlined />} loading={holdingsLoading} disabled={!holdingsEligible} onClick={() => loadHoldings(fund.fund_type)}>刷新实时</Button>
-              <Button size="small" icon={<DatabaseOutlined />} loading={syncSnapshotLoading} onClick={syncStoredHoldings}>同步入库</Button>
+              <Button size="small" icon={<DatabaseOutlined />} loading={syncSnapshotLoading} onClick={syncStoredHoldings}>
+                {profileSyncSource === 'xiaobeiyangji' ? '同步小倍' : '同步入库'}
+              </Button>
             </Space>
           )}
         >

@@ -214,6 +214,26 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
                 candidates.append(code)
         return candidates
 
+    def _source_for_profile_sync(self, request, source_name):
+        source = SourceRegistry.get_source(source_name)
+        if source_name != 'xiaobeiyangji':
+            return source
+        if not request.user or not request.user.is_authenticated:
+            raise ValueError('同步小倍养基数据前请先登录')
+        from .models import UserSourceCredential
+
+        credential = UserSourceCredential.objects.filter(
+            user=request.user,
+            source_name='xiaobeiyangji',
+            is_active=True,
+        ).first()
+        if not credential:
+            raise ValueError('未登录小倍养基数据源，请先在数据源里完成手机号登录')
+        if not source or not hasattr(source, 'set_token'):
+            raise ValueError('小倍养基数据源不可用')
+        source.set_token(credential.token)
+        return source
+
     def list(self, request, *args, **kwargs):
         """基金列表（分页）"""
         queryset = self.filter_queryset(self.get_queryset()).order_by('fund_code')
@@ -336,12 +356,17 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
         parsed_report_date = date_type.fromisoformat(report_date) if report_date else None
         source_name = request.data.get('source') or request.query_params.get('source') or 'tencent_fund'
         target_code = request.data.get('target_code') or request.query_params.get('target_code')
+        try:
+            source_instance = self._source_for_profile_sync(request, source_name)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         result = sync_fund_holdings_snapshot(
             fund_code,
             source_name=source_name,
             report_date=parsed_report_date,
             target_code=target_code,
+            source_instance=source_instance,
         )
         return Response(result, status=status.HTTP_200_OK if result.get('success') else status.HTTP_404_NOT_FOUND)
 
@@ -352,7 +377,16 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
 
         source_name = request.data.get('source') or request.query_params.get('source') or 'tencent_fund'
         target_code = request.data.get('target_code') or request.query_params.get('target_code')
-        result = sync_fund_basic_profile(fund_code, source_name=source_name, target_code=target_code)
+        try:
+            source_instance = self._source_for_profile_sync(request, source_name)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        result = sync_fund_basic_profile(
+            fund_code,
+            source_name=source_name,
+            target_code=target_code,
+            source_instance=source_instance,
+        )
         return Response(result)
 
     @action(detail=False, methods=['post'], url_path='batch-sync-profile')
@@ -369,12 +403,24 @@ class FundViewSet(viewsets.ReadOnlyModelViewSet):
             fund_codes = list(Fund.objects.order_by('fund_code').values_list('fund_code', flat=True)[:limit])
 
         results = {}
+        try:
+            source_instance = self._source_for_profile_sync(request, source_name)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         for code in fund_codes[:limit]:
             try:
-                profile_result = sync_fund_basic_profile(code, source_name=source_name)
+                profile_result = sync_fund_basic_profile(
+                    code,
+                    source_name=source_name,
+                    source_instance=source_instance,
+                )
                 holding_result = None
                 if sync_holdings:
-                    holding_result = sync_fund_holdings_snapshot(code, source_name=source_name)
+                    holding_result = sync_fund_holdings_snapshot(
+                        code,
+                        source_name=source_name,
+                        source_instance=source_instance,
+                    )
                 results[code] = {
                     'success': True,
                     'profile': profile_result,

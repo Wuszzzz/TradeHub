@@ -3,12 +3,14 @@
 """
 import logging
 import math
+import os
 import requests
 from decimal import Decimal
 from datetime import datetime, date
 from typing import Dict, Optional, List
 
 from .base import BaseEstimateSource
+from fundval.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,32 @@ class XiaoBeiYangJiSource(BaseEstimateSource):
         if result.get('code') != 200:
             raise Exception(f"API 错误: {result.get('msg', 'Unknown error')}")
         return result.get('data')
+
+    def _fund_research_url(self) -> str:
+        return (
+            os.environ.get('FUND_RESEARCH_URL')
+            or config.get('fund_research_url', '')
+            or 'http://fund-research:18081'
+        ).rstrip('/')
+
+    def _research_post(self, path: str, payload: dict) -> dict:
+        self._require_login()
+        body = {
+            'token': self._token,
+            'union_id': self._union_id,
+            'version': self.VERSION,
+            **payload,
+        }
+        response = requests.post(
+            f'{self._fund_research_url()}{path}',
+            json=body,
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if not result.get('ok'):
+            raise Exception(result.get('error') or '小倍养基 Go 拉取失败')
+        return result.get('data') or {}
 
     def _require_login(self):
         if not self._token:
@@ -343,6 +371,35 @@ class XiaoBeiYangJiSource(BaseEstimateSource):
             logger.error(f'获取持仓列表失败: {e}')
             raise
 
+    def fetch_profile(self, fund_code: str) -> dict:
+        """通过 Go 投研服务拉取小倍养基基金画像。"""
+        fund_code = self._normalize_fund_code(fund_code)
+        data = self._research_post('/api/fund-research/v1/xiaobei/fund-profile', {
+            'fund_code': fund_code,
+        })
+        report_date = None
+        if data.get('report_date'):
+            try:
+                report_date = date.fromisoformat(str(data['report_date'])[:10])
+            except Exception:
+                report_date = None
+        return {
+            'symbol': fund_code,
+            'source': 'xiaobeiyangji',
+            'report_date': report_date,
+            'asset': data.get('asset') or [],
+            'industry': data.get('industry') or [],
+            'rank_info': {},
+            'holdings': data.get('holdings') or [],
+            'raw_data': data.get('raw_data') or data,
+        }
+
+    def _normalize_fund_code(self, fund_code: str) -> str:
+        value = str(fund_code or '').strip().lower()
+        if value.startswith(('sh', 'sz')):
+            return value[2:]
+        return value
+
     # ─────────────────────────────────────────────
     # 其他必须实现的抽象方法
     # ─────────────────────────────────────────────
@@ -351,5 +408,19 @@ class XiaoBeiYangJiSource(BaseEstimateSource):
         raise NotImplementedError('小倍养基不支持基金列表查询')
 
     def fetch_index_holdings(self, fund_code: str) -> list:
-        from .eastmoney import EastMoneySource
-        return EastMoneySource().fetch_index_holdings(fund_code)
+        fund_code = self._normalize_fund_code(fund_code)
+        data = self._research_post('/api/fund-research/v1/xiaobei/fund-holdings', {
+            'fund_code': fund_code,
+        })
+        result = []
+        for item in data.get('items') or []:
+            result.append({
+                'stock_code': item.get('stock_code') or '',
+                'stock_name': item.get('stock_name') or '',
+                'weight': Decimal(str(item.get('weight') or 0)),
+                'price': Decimal(str(item.get('price'))) if item.get('price') not in (None, '', 0) else None,
+                'change_percent': Decimal(str(item.get('change_percent'))) if item.get('change_percent') not in (None, '') else None,
+                'holding_type': item.get('holding_type') or 'stock',
+                'raw_data': item.get('raw_data') or item,
+            })
+        return result

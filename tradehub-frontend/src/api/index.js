@@ -57,7 +57,7 @@ export const fundsAPI = {
   }),
   indexHoldings: (fundCode, source = 'eastmoney') => api.get(`/funds/${fundCode}/index_holdings/`, { params: { source } }),
   holdingsRealtime: (fundCode) => api.get(`/funds/${fundCode}/holdings-realtime/`),
-  syncProfile: (fundCode) => api.post(`/funds/${fundCode}/sync-profile/`),
+  syncProfile: (fundCode, source = 'tencent_fund') => api.post(`/funds/${fundCode}/sync-profile/`, { source }),
   syncHoldings: (fundCode, source = 'tencent_fund') => api.post(`/funds/${fundCode}/sync-holdings/`, { source }),
   storedHoldings: (fundCode) => api.get(`/funds/${fundCode}/holdings-stored/`),
   companies: (params) => api.get('/fund-companies/', { params }),

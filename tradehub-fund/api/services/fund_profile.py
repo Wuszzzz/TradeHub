@@ -209,7 +209,7 @@ def sync_fund_performance_ranks(fund, profile, source='tencent_fund'):
     return count
 
 
-def sync_fund_basic_profile(fund_code, source_name='tencent_fund', target_code=None):
+def sync_fund_basic_profile(fund_code, source_name='tencent_fund', target_code=None, source_instance=None):
     fund = Fund.objects.get(fund_code=fund_code)
     company_name = infer_company_name(fund.fund_name)
     company = None
@@ -222,7 +222,7 @@ def sync_fund_basic_profile(fund_code, source_name='tencent_fund', target_code=N
             raw_data={'fund_code': fund_code, 'fund_name': fund.fund_name},
         )
 
-    source = SourceRegistry.get_source(source_name)
+    source = source_instance or SourceRegistry.get_source(source_name)
     profile = {}
     if source and hasattr(source, 'fetch_profile'):
         profile = source.fetch_profile(_market_symbol(target_code or fund_code)) or {}
@@ -287,9 +287,9 @@ def sync_fund_basic_profiles(fund_codes, source_name='tencent_fund', limit=None)
     }
 
 
-def sync_fund_holdings_snapshot(fund_code, source_name='tencent_fund', report_date=None, target_code=None):
+def sync_fund_holdings_snapshot(fund_code, source_name='tencent_fund', report_date=None, target_code=None, source_instance=None):
     fund = Fund.objects.get(fund_code=fund_code)
-    source = SourceRegistry.get_source(source_name) or SourceRegistry.get_source('eastmoney')
+    source = source_instance or SourceRegistry.get_source(source_name) or SourceRegistry.get_source('eastmoney')
     if not source:
         return {'success': False, 'fund_code': fund_code, 'error': 'no source'}
 
@@ -344,7 +344,12 @@ def sync_fund_holdings_snapshot(fund_code, source_name='tencent_fund', report_da
 
     report_date = report_date or date.today()
     total_weight = sum((_decimal_or_none(item.get('weight')) or Decimal('0')) for item in holdings)
-    sync_fund_basic_profile(fund_code, source_name='tencent_fund', target_code=resolved_code)
+    sync_fund_basic_profile(
+        fund_code,
+        source_name=source_name if source_instance else 'tencent_fund',
+        target_code=resolved_code,
+        source_instance=source_instance,
+    )
 
     with transaction.atomic():
         snapshot, _ = FundHoldingSnapshot.objects.update_or_create(

@@ -134,6 +134,42 @@ MOCK_OPTIONAL_NAV_FOR_HOLDINGS = {
     ]
 }
 
+MOCK_GO_PROFILE_RESPONSE = {
+    'ok': True,
+    'data': {
+        'fund_code': '025209',
+        'fund_name': '永赢先锋半导体智选C',
+        'source': 'xiaobeiyangji',
+        'report_date': '2026-03-31',
+        'asset': [
+            {'name': '股票', 'ratio': 91.2},
+            {'name': '现金', 'ratio': 8.8},
+        ],
+        'industry': [
+            {'name': '半导体', 'ratio': 55.6},
+            {'name': '电子', 'ratio': 23.1},
+        ],
+        'holdings': [
+            {'stock_code': '688981', 'stock_name': '中芯国际', 'weight': 9.8, 'change_percent': 1.2, 'holding_type': 'stock'},
+            {'stock_code': '300308', 'stock_name': '中际旭创', 'weight': 8.5, 'change_percent': -0.5, 'holding_type': 'stock'},
+        ],
+        'raw_data': {'detail': {'name': '永赢先锋半导体智选C'}},
+    }
+}
+
+MOCK_GO_HOLDINGS_RESPONSE = {
+    'ok': True,
+    'data': {
+        'fund_code': '025209',
+        'source': 'xiaobeiyangji',
+        'count': 2,
+        'items': [
+            {'stock_code': '688981', 'stock_name': '中芯国际', 'weight': 9.8, 'price': 88.12, 'change_percent': 1.2, 'holding_type': 'stock'},
+            {'stock_code': '300308', 'stock_name': '中际旭创', 'weight': 8.5, 'price': 126.5, 'change_percent': -0.5, 'holding_type': 'stock'},
+        ],
+    }
+}
+
 
 # ─────────────────────────────────────────────
 # 辅助：构造已登录的 source
@@ -472,3 +508,41 @@ class TestFetchHoldings:
         # money=12345, nav=1.6552 → share ≈ 7458.16
         expected_share = Decimal('12345') / Decimal('1.6552')
         assert abs(h['share'] - expected_share) < Decimal('0.01')
+
+
+class TestResearchBackedProfile:
+    @patch('requests.post')
+    def test_fetch_profile_uses_go_service_and_maps_fields(self, mock_post):
+        mock_post.return_value = mock_response(MOCK_GO_PROFILE_RESPONSE)
+        source = make_logged_in_source()
+
+        result = source.fetch_profile('sz025209')
+
+        assert result['symbol'] == '025209'
+        assert result['source'] == 'xiaobeiyangji'
+        assert result['report_date'] == date(2026, 3, 31)
+        assert result['asset'][0]['name'] == '股票'
+        assert result['industry'][0]['name'] == '半导体'
+        assert result['holdings'][0]['stock_code'] == '688981'
+
+        body = mock_post.call_args[1]['json']
+        assert body['token'] == 'test-token-abc'
+        assert body['union_id'] == '13800138000'
+        assert body['fund_code'] == '025209'
+
+    @patch('requests.post')
+    def test_fetch_index_holdings_uses_go_service_and_maps_fields(self, mock_post):
+        mock_post.return_value = mock_response(MOCK_GO_HOLDINGS_RESPONSE)
+        source = make_logged_in_source()
+
+        result = source.fetch_index_holdings('sh025209')
+
+        assert len(result) == 2
+        assert result[0]['stock_code'] == '688981'
+        assert result[0]['stock_name'] == '中芯国际'
+        assert result[0]['weight'] == Decimal('9.8')
+        assert result[0]['price'] == Decimal('88.12')
+        assert result[0]['change_percent'] == Decimal('1.2')
+
+        body = mock_post.call_args[1]['json']
+        assert body['fund_code'] == '025209'

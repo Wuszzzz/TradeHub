@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 func (s *Server) Health(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +122,39 @@ func (s *Server) PortfolioHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	result := AnalyzePortfolioHealth(payload)
 	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: result})
+}
+
+func (s *Server) XiaoBeiFundProfile(w http.ResponseWriter, r *http.Request) {
+	var payload XiaoBeiRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		errorJSON(w, http.StatusBadRequest, fmt.Errorf("invalid xiaobeiyangji payload: %w", err))
+		return
+	}
+	profile, err := NewXiaoBeiClient(20*time.Second).FundProfile(r.Context(), payload)
+	if err != nil {
+		errorJSON(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: profile})
+}
+
+func (s *Server) XiaoBeiFundHoldings(w http.ResponseWriter, r *http.Request) {
+	var payload XiaoBeiRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		errorJSON(w, http.StatusBadRequest, fmt.Errorf("invalid xiaobeiyangji payload: %w", err))
+		return
+	}
+	holdings, err := NewXiaoBeiClient(20*time.Second).FundHoldings(r.Context(), payload)
+	if err != nil {
+		errorJSON(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, APIResponse{OK: true, Data: map[string]any{
+		"fund_code": normalizeFundCode(payload.FundCode),
+		"source":    "xiaobeiyangji",
+		"count":     len(holdings),
+		"items":     holdings,
+	}})
 }
 
 func (s *Server) FundByStock(w http.ResponseWriter, r *http.Request) {

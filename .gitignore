@@ -9,6 +9,7 @@ venv/
 ENV/
 .venv
 .cache/
+小倍养基/
 
 # Django
 *.log

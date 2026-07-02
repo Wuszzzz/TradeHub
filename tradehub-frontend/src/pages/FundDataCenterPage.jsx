@@ -9,6 +9,7 @@ import {
   Input,
   message,
   Row,
+  Segmented,
   Space,
   Statistic,
   Table,
@@ -24,7 +25,7 @@ import {
   TeamOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { fundsAPI } from '../api';
+import { fundsAPI, sourceAPI } from '../api';
 
 const { Text, Title } = Typography;
 
@@ -49,6 +50,7 @@ const FundDataCenterPage = () => {
   const [sectorSyncError, setSectorSyncError] = useState('');
   const [ranks, setRanks] = useState([]);
   const [dailyFacts, setDailyFacts] = useState([]);
+  const [syncSource, setSyncSource] = useState('tencent_fund');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -95,12 +97,23 @@ const FundDataCenterPage = () => {
     const { fundCode } = await form.validateFields();
     setSyncing(true);
     try {
-      await fundsAPI.syncProfile(fundCode);
-      const res = await fundsAPI.syncHoldings(fundCode, 'tencent_fund');
+      if (syncSource === 'xiaobeiyangji') {
+        const statusRes = await sourceAPI.getStatus('xiaobeiyangji');
+        if (!statusRes.data?.logged_in) {
+          message.warning('请先在设置页登录小倍养基，再同步基金画像');
+          return;
+        }
+      }
+      await fundsAPI.syncProfile(fundCode, syncSource);
+      const res = await fundsAPI.syncHoldings(fundCode, syncSource);
       if (res.data?.success === false) {
-        message.warning('基金资料已同步，但暂未命中披露持仓');
+        message.warning(syncSource === 'xiaobeiyangji'
+          ? '小倍养基画像已同步，但暂未命中可入库重仓'
+          : '基金资料已同步，但暂未命中披露持仓');
       } else {
-        message.success('已同步基金资料和腾讯持仓快照');
+        message.success(syncSource === 'xiaobeiyangji'
+          ? '已同步小倍养基资料和持仓快照'
+          : '已同步基金资料和腾讯持仓快照');
       }
       await loadData();
     } catch (err) {
@@ -203,7 +216,19 @@ const FundDataCenterPage = () => {
             <Input placeholder="基金代码，如 159915" style={{ width: 220 }} />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" icon={<UploadOutlined />} loading={syncing}>同步腾讯资料和持仓</Button>
+            <Segmented
+              value={syncSource}
+              onChange={setSyncSource}
+              options={[
+                { label: '腾讯', value: 'tencent_fund' },
+                { label: '小倍养基', value: 'xiaobeiyangji' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit" icon={<UploadOutlined />} loading={syncing}>
+              {syncSource === 'xiaobeiyangji' ? '同步小倍资料和持仓' : '同步腾讯资料和持仓'}
+            </Button>
           </Form.Item>
           <Form.Item>
             <Button icon={<FieldTimeOutlined />} loading={syncing} onClick={syncFundNav}>同步净值和日事实</Button>
